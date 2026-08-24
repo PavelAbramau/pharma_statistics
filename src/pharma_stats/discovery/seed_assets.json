@@ -1,0 +1,25 @@
+{
+  "_comment": "PLACEHOLDER seed list built from publicly known ADCs (approved or late clinical stage) as of 2026-08-19. The user said they would supply the real seed list — replace or extend this file with it. Each entry's 'synonyms' seeds the CT.gov query.intr expansion in discovery/candidates.py:iter_seed_matches, and also becomes part of that asset's synonym cluster. Includes some heme-only assets (e.g. brentuximab vedotin) even though scope is solid tumours only, since indication filtering is an explicit later step, not part of discovery.",
+  "seed_assets": [
+    {"name": "trastuzumab emtansine", "synonyms": ["T-DM1", "Kadcyla", "ado-trastuzumab emtansine", "trastuzumab-DM1"]},
+    {"name": "trastuzumab deruxtecan", "synonyms": ["DS-8201", "DS-8201a", "T-DXd", "Enhertu", "fam-trastuzumab deruxtecan-nxki"]},
+    {"name": "sacituzumab govitecan", "synonyms": ["IMMU-132", "Trodelvy"]},
+    {"name": "enfortumab vedotin", "synonyms": ["ASG-22CE", "ASG-22ME", "Padcev", "EV"]},
+    {"name": "mirvetuximab soravtansine", "synonyms": ["IMGN853", "Elahere"]},
+    {"name": "disitamab vedotin", "synonyms": ["RC48", "RC48-ADC", "Aidixi"]},
+    {"name": "datopotamab deruxtecan", "synonyms": ["Dato-DXd", "DS-1062", "Datroway"]},
+    {"name": "patritumab deruxtecan", "synonyms": ["HER3-DXd", "U3-1402"]},
+    {"name": "tisotumab vedotin", "synonyms": ["HuMax-TF-ADC", "Tivdak", "tisotumab vedotin-tftv"]},
+    {"name": "sacituzumab tirumotecan", "synonyms": ["MK-2870", "SKB264"]},
+    {"name": "brentuximab vedotin", "synonyms": ["SGN-35", "Adcetris"]},
+    {"name": "polatuzumab vedotin", "synonyms": ["DCDS4501A", "Polivy"]},
+    {"name": "loncastuximab tesirine", "synonyms": ["ADCT-402", "Zynlonta"]},
+    {"name": "inotuzumab ozogamicin", "synonyms": ["CMC-544", "Besponsa"]},
+    {"name": "gemtuzumab ozogamicin", "synonyms": ["CMA-676", "Mylotarg"]},
+    {"name": "vic-trastuzumab duocarmazine", "synonyms": ["SYD985"]},
+    {"name": "glembatumumab vedotin", "synonyms": ["CDX-011", "CR011"]},
+    {"name": "telisotuzumab vedotin", "synonyms": ["ABBV-399", "Teliso-V"]},
+    {"name": "rovalpituzumab tesirine", "synonyms": ["Rova-T", "SC16LD6.5"]},
+    {"name": "cofetuzumab pelidotin", "synonyms": ["PF-06647020"]}
+  ]
+}
