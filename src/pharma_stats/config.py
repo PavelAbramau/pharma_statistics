@@ -7,9 +7,10 @@ RAW_DIR = REPO_ROOT / "raw"
 DATA_DIR = REPO_ROOT / "data"
 GOLD_DIR = REPO_ROOT / "gold"
 REPORTS_DIR = REPO_ROOT / "reports"
+AUDIT_DIR = REPO_ROOT / "audit"
 
 MANIFEST_DB = DATA_DIR / "manifest.duckdb"
 WAREHOUSE_DB = DATA_DIR / "warehouse.duckdb"
 
-for _d in (RAW_DIR, DATA_DIR, GOLD_DIR, REPORTS_DIR):
+for _d in (RAW_DIR, DATA_DIR, GOLD_DIR, REPORTS_DIR, AUDIT_DIR):
     _d.mkdir(parents=True, exist_ok=True)

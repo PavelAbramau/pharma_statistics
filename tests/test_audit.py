@@ -1,0 +1,240 @@
+"""Tests for the audit harness: a check that can't fail is decoration,
+so these exercise both the passing and the failing path of each real
+(non-stub) stage."""
+from __future__ import annotations
+
+import functools
+import json
+from datetime import date, datetime, timezone
+
+import duckdb
+import pytest
+
+from pharma_stats import snapshot as snap
+from pharma_stats.audit import __main__ as audit_main
+from pharma_stats.audit import differ as differ_stage
+from pharma_stats.audit import gold_set, label_sufficiency, provenance, report
+from pharma_stats.audit.types import Check
+from pharma_stats.differ.extract import EVIDENCE_EVENTS_SCHEMA
+from pharma_stats.history.index import HISTORY_INDEX_SCHEMA
+from pharma_stats.labelling import store
+
+
+def test_report_renders_and_counts_levels():
+    checks = [
+        Check("s1", "a", "FAIL", "0", "1"),
+        Check("s1", "b", "WARN", "0", "1"),
+        Check("s2", "c", "INFO", "-", "-"),
+        Check("s2", "d", "PASS", "0", "0"),
+    ]
+    text = report.render(checks, stages_run=["s1", "s2"])
+    assert "1 FAIL / 1 WARN / 1 INFO / 1 PASS" in text
+    assert "## s1" in text and "## s2" in text
+    assert "FAIL — stop and look at these first" in text
+
+
+def test_report_write_creates_timestamped_file(tmp_path):
+    checks = [Check("s1", "a", "PASS", "0", "0")]
+    path = report.write(checks, stages_run=["s1"], out_dir=tmp_path)
+    assert path.exists()
+    assert path.parent == tmp_path
+
+
+@pytest.fixture()
+def raw_and_manifest(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    manifest_db = tmp_path / "manifest.duckdb"
+
+    def save(source, id_, body, fetched_at):
+        return snap.save_snapshot(
+            source, id_, url="https://x", body=body, fetched_at=fetched_at,
+            raw_dir=raw_dir, manifest_db=manifest_db,
+        )
+
+    save("ctgov", "NCT111", json.dumps({"a": 1}), datetime(2026, 1, 1, tzinfo=timezone.utc))
+    save("ctgov", "NCT111", json.dumps({"a": 2}), datetime(2026, 2, 1, tzinfo=timezone.utc))
+    save("ctgov", "NCT222", json.dumps({"b": 1}), datetime(2026, 1, 15, tzinfo=timezone.utc))
+
+    monkeypatch.setattr(provenance, "RAW_DIR", raw_dir)
+    monkeypatch.setattr(provenance, "MANIFEST_DB", manifest_db)
+    monkeypatch.setattr(snap, "get_as_of", functools.partial(snap.get_as_of, manifest_db=manifest_db))
+
+    return raw_dir, manifest_db
+
+
+def test_provenance_passes_on_clean_store(raw_and_manifest):
+    checks = provenance.run()
+    assert not any(c.level == "FAIL" for c in checks)
+    probe = next(c for c in checks if "get_as_of returns" in c.name)
+    assert probe.level == "PASS"
+    assert probe.expected.startswith("3 ")  # 3 probes for the one (source,id) pair with 2 dates
+
+
+def test_provenance_detects_manifest_sha_tamper(raw_and_manifest):
+    raw_dir, manifest_db = raw_and_manifest
+    con = duckdb.connect(str(manifest_db))
+    con.execute("UPDATE snapshots SET sha256 = 'deadbeef' WHERE id = 'NCT222'")
+    con.close()
+
+    checks = provenance.run()
+    mismatch = next(c for c in checks if "manifest sha256 matches" in c.name)
+    assert mismatch.level == "FAIL"
+    assert "1 / " in mismatch.actual
+
+
+def test_provenance_detects_get_as_of_regression(raw_and_manifest, monkeypatch):
+    # simulate a regressed get_as_of that always returns the latest snapshot,
+    # ignoring as_of entirely — the exact bug this probe exists to catch
+    _, manifest_db = raw_and_manifest
+    original_get_as_of = snap.get_as_of
+
+    def broken_latest_always(source, id_, as_of, *, manifest_db=manifest_db):
+        return original_get_as_of(source, id_, date.today(), manifest_db=manifest_db)
+
+    monkeypatch.setattr(snap, "get_as_of", broken_latest_always)
+    checks = provenance.run()
+    probe = next(c for c in checks if "get_as_of returns" in c.name)
+    assert probe.level == "FAIL"
+    assert "future" in probe.detail  # our own commentary on why this matters
+
+
+def test_gold_set_flags_missing_dead_confirmed_fields(tmp_path, monkeypatch):
+    gold_path = tmp_path / "labels.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    monkeypatch.setattr(gold_set, "pp", type("_", (), {"load_materialized": staticmethod(lambda: [])})())
+
+    # hand-crafted record that bypasses the app's own validator entirely —
+    # exactly the scenario this independent re-check exists for
+    bad = {
+        "event_id": "e1", "timestamp": "2026-01-01T00:00:00+00:00", "action": "label",
+        "program_id": "p1", "status": "dead_confirmed", "kill_reason": None,
+        "confidence": "high", "evidence_note": "", "label_evidence_date": None,
+        "public_confirmation_date": None, "never_publicly_confirmed": False,
+        "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
+    }
+    store.append_record(bad, path=gold_path)
+
+    checks = gold_set.run()
+    invariant_checks = [c for c in checks if "dead_confirmed record has" in c.name]
+    assert len(invariant_checks) == 3
+    assert all(c.level == "FAIL" for c in invariant_checks)
+
+
+def test_gold_set_passes_clean_dead_confirmed_record(tmp_path, monkeypatch):
+    gold_path = tmp_path / "labels.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    monkeypatch.setattr(gold_set, "pp", type("_", (), {"load_materialized": staticmethod(lambda: [])})())
+
+    good = {
+        "event_id": "e1", "timestamp": "2026-01-01T00:00:00+00:00", "action": "label",
+        "program_id": "p1", "status": "dead_confirmed", "kill_reason": "futility_efficacy",
+        "confidence": "high", "evidence_note": "", "label_evidence_date": "2024-01-01",
+        "public_confirmation_date": None, "never_publicly_confirmed": True,
+        "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
+    }
+    store.append_record(good, path=gold_path)
+
+    checks = gold_set.run()
+    invariant_checks = [c for c in checks if "dead_confirmed record has" in c.name]
+    assert all(c.level == "PASS" for c in invariant_checks)
+
+
+def test_label_sufficiency_reports_insufficient_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "LABELS_PATH", tmp_path / "labels.jsonl")
+    checks = label_sufficiency.run()
+    assert checks[0].level == "INFO"
+    assert "0 usable" in checks[0].actual
+
+
+def test_label_sufficiency_bootstraps_with_enough_data(tmp_path, monkeypatch):
+    gold_path = tmp_path / "labels.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+
+    for i in range(15):
+        rec = {
+            "event_id": f"e{i}", "timestamp": f"2026-01-{i+1:02d}T00:00:00+00:00", "action": "label",
+            "program_id": f"p{i}", "status": "dead_confirmed", "kill_reason": "futility_efficacy",
+            "confidence": "high", "evidence_note": "", "label_evidence_date": "2024-01-01",
+            "public_confirmation_date": "2024-06-01", "never_publicly_confirmed": False,
+            "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
+        }
+        store.append_record(rec, path=gold_path)
+
+    checks = label_sufficiency.run()
+    assert len(checks) == 1
+    assert checks[0].level in ("INFO", "PASS")
+    assert "N=15" in checks[0].actual
+
+
+def test_cli_exits_nonzero_on_fail(tmp_path, monkeypatch, capsys):
+    gold_path = tmp_path / "labels.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    monkeypatch.setattr(gold_set, "pp", type("_", (), {"load_materialized": staticmethod(lambda: [])})())
+    bad = {
+        "event_id": "e1", "timestamp": "2026-01-01T00:00:00+00:00", "action": "label",
+        "program_id": "p1", "status": "dead_confirmed", "kill_reason": None,
+        "confidence": "high", "evidence_note": "", "label_evidence_date": None,
+        "public_confirmation_date": None, "never_publicly_confirmed": False,
+        "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
+    }
+    store.append_record(bad, path=gold_path)
+
+    from pharma_stats.audit import report as report_mod
+    monkeypatch.setattr(report_mod, "AUDIT_DIR", tmp_path / "audit_out")
+
+    exit_code = audit_main.main(["--stage", "gold_set"])
+    assert exit_code == 1
+    assert (tmp_path / "audit_out").exists()
+
+
+def test_differ_stage_reports_not_materialized(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.duckdb"
+    duckdb.connect(str(db_path)).close()
+    monkeypatch.setattr(differ_stage, "WAREHOUSE_DB", db_path)
+    checks = differ_stage.run()
+    assert len(checks) == 1
+    assert checks[0].level == "INFO"
+    assert "not materialized" in checks[0].actual
+
+
+def test_differ_stage_catches_boundary_invariant_violation(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute(EVIDENCE_EVENTS_SCHEMA)
+    con.execute(HISTORY_INDEX_SCHEMA)
+    # a hand-corrupted row: enrollment_target_changed with no direction —
+    # exactly what a regressed differ that forgot the ESTIMATED/ACTUAL
+    # guard would write
+    con.execute(
+        """
+        INSERT INTO evidence_events VALUES
+        (1, 'NCT1', 1, 2, '2024-01-01', 'enrollment_target_changed', 'enrollment',
+         NULL, '300', '1', 'bad row', '0.1.0', now())
+        """
+    )
+    con.close()
+    monkeypatch.setattr(differ_stage, "WAREHOUSE_DB", db_path)
+    checks = differ_stage.run()
+    invariant = next(c for c in checks if "ESTIMATED/ACTUAL boundary" in c.name)
+    assert invariant.level == "FAIL"
+
+
+def test_differ_stage_passes_on_clean_events(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute(EVIDENCE_EVENTS_SCHEMA)
+    con.execute(HISTORY_INDEX_SCHEMA)
+    con.execute(
+        """
+        INSERT INTO evidence_events VALUES
+        (1, 'NCT1', 1, 2, '2024-01-01', 'enrollment_target_changed', 'enrollment',
+         'decreased', '300', '150', 'ok row', '0.1.0', now()),
+        (2, 'NCT1', 2, 3, '2024-02-01', 'status_changed', 'overallStatus',
+         NULL, 'RECRUITING', 'TERMINATED', 'ok row', '0.1.0', now())
+        """
+    )
+    con.close()
+    monkeypatch.setattr(differ_stage, "WAREHOUSE_DB", db_path)
+    checks = differ_stage.run()
+    invariant = next(c for c in checks if "ESTIMATED/ACTUAL boundary" in c.name)
+    assert invariant.level == "PASS"

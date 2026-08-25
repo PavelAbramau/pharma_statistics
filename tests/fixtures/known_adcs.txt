@@ -1,0 +1,121 @@
+# Hand-maintained recall-probe fixture for the "universe" audit stage.
+#
+# PROVENANCE: this list was rebuilt from scratch on 2026-08-25 using real
+# web search, deliberately NOT copied from
+# src/pharma_stats/discovery/seed_assets.json (which is an INPUT to
+# discovery's seed_expansion and would make the recall check circular).
+# Overlap with seed_assets.json's 20 names is expected and fine — many of
+# those (Enhertu, Kadcyla, Padcev, etc.) are real, well-known ADCs that any
+# independent source will also surface. What matters is that the SOURCE
+# here is independent of seed_assets.json, not that the names differ.
+#
+# This list is NOT exhaustive. It is compiled from the sources below,
+# favouring recall over precision per project convention. It intentionally
+# includes some non-solid-tumour (haematologic-malignancy) and some
+# discontinued/early-discovery-stage assets, because the cited sources do
+# not cleanly separate those and over-inclusion is preferred here; scope
+# filtering to solid-tumour / industry-sponsored is a later pipeline step,
+# not something to pre-filter into this fixture.
+#
+# Sources (all accessed 2026-08-25):
+#   1. Biopharma Spec, "FDA-Approved Antibody Drug Conjugates: Full 2026
+#      List" (article dated "early 2026").
+#      https://biopharmaspec.com/blog/fda-approved-adc-drugs/
+#   2. Maecker H, Jonnalagadda V, Bhakta S, Jammalamadaka V, Junutula JR.
+#      "Exploration of the antibody-drug conjugate clinical landscape."
+#      mAbs. 2023;15(1):2229101. Published online 2023-08-28.
+#      https://pmc.ncbi.nlm.nih.gov/articles/PMC10464553/
+#      (covers 11 approved + 164 in-clinical-trial + 92 discontinued ADCs
+#      as of mid-2023; used here for named clinical/discontinued examples).
+#   3. ADC Review (adcreview.com), "AACR 2026: Emerging Antibody-Drug
+#      Conjugates for the Treatment of Solid Tumors (Part 1)", published
+#      2026-05-05.
+#      https://www.adcreview.com/conference-coverage/aacr/aacr-2026-emerging-antibody-drug-conjugates-for-the-treatment-of-solid-tumors-part-1/
+#   4. Biointron, "Antibody-Drug Conjugate (ADC) Programs to Watch in
+#      2026", published 2026-01-27.
+#      https://www.biointron.com/blog/antibody-drug-conjugate-adc-programs-to-watch-in-2026.html
+#   5. A handful of additional names (zocilurtatug pelitecan, tilatamig
+#      samrotecan, FDA018-ADC, ADCE-D01) cross-referenced via general web
+#      search snippets (trade-press coverage of Zai Lab/Amgen, AstraZeneca,
+#      Fudan-Zhangjiang Bio-Pharmaceutical, and Adcendo ApS pipeline news,
+#      2025-2026); lower confidence than sources 1-4 but each corroborated
+#      by more than one independent snippet.
+#
+# Format: one asset per line, "primary_name | synonym1 | synonym2 | ...".
+# Lines starting with # are comments.
+
+# --- FDA-approved ADCs (source 1) ---
+gemtuzumab ozogamicin | CMA-676 | Mylotarg
+brentuximab vedotin | SGN-35 | Adcetris
+trastuzumab emtansine | T-DM1 | Kadcyla | ado-trastuzumab emtansine
+inotuzumab ozogamicin | CMC-544 | Besponsa
+moxetumomab pasudotox | Lumoxiti | moxetumomab pasudotox-tdfk
+polatuzumab vedotin | DCDS4501A | Polivy
+enfortumab vedotin | ASG-22CE | ASG-22ME | Padcev | EV
+trastuzumab deruxtecan | DS-8201 | DS-8201a | T-DXd | Enhertu
+sacituzumab govitecan | IMMU-132 | Trodelvy
+belantamab mafodotin | GSK2857916 | Blenrep
+loncastuximab tesirine | ADCT-402 | Zynlonta
+tisotumab vedotin | HuMax-TF-ADC | Tivdak | tisotumab vedotin-tftv
+mirvetuximab soravtansine | IMGN853 | Elahere
+datopotamab deruxtecan | Dato-DXd | DS-1062 | Datroway
+telisotuzumab vedotin | ABBV-399 | Teliso-V | Emrelis
+
+# --- Active clinical-trial ADCs (source 2) ---
+tusamitamab ravtansine | SAR408701
+trastuzumab duocarmazine | SYD985 | vic-trastuzumab duocarmazine
+trastuzumab rezetecan | SHR-A1811
+upifitamab rilsodotin | XMT-1536 | UpRi
+disitamab vedotin | RC48 | RC48-ADC | Aidixi
+sacituzumab tirumotecan | MK-2870 | SKB264
+patritumab deruxtecan | HER3-DXd | U3-1402
+
+# --- Discontinued ADCs, named examples (source 2) ---
+enapotamab vedotin | AXL-107-MMAE
+glembatumumab vedotin | CDX-011 | CR011
+samrotamab vedotin | ABBV-085
+indusatumab vedotin | MLN0264
+losatuxizumab vedotin | ABBV-221
+depatuxizumab mafodotin | ABT-414
+pinatuzumab vedotin | RG7593
+iladatuzumab vedotin | RG7986
+coltuximab ravtansine | SAR3419
+rovalpituzumab tesirine | Rova-T | SC16LD6.5
+cantuzumab mertansine | SB-408075
+bivatuzumab mertansine | BIWI 1
+lorvotuzumab mertansine | IMGN901
+azintuxizumab vedotin | ABBV-838
+lifastuzumab vedotin | RG7599 | DNIB0600A
+
+# --- Early clinical-stage solid-tumour ADCs presented at AACR 2026 (source 3) ---
+RGX-019 | RGX-019-MMAE
+JS212
+ACR335
+BH4601
+ZW191
+ACR246
+SKB410 | MK-3120
+HP-004
+DB-1329
+XNW28012
+XNW27011
+LM-338
+IN30758
+ANT045
+GENA-104 | EP0089
+ZL-6201
+3H-10000
+
+# --- ADC programs to watch in 2026 (source 4) ---
+pivekimab sunirine | PVEK
+izalontamab brengitecan | iza-bren | BL-B01D1
+rinatabart sesutecan | Rina-S | GEN1184
+trastuzumab pamirtecan | BNT323 | DB-1303
+sonesitatug vedotin | AZD0901 | CMG901
+ifinatamab deruxtecan | I-DXd
+
+# --- Additional names, cross-referenced trade-press snippets (source 5) ---
+zocilurtatug pelitecan | zoci | ZL-1310
+tilatamig samrotecan
+FDA018-ADC
+ADCE-D01

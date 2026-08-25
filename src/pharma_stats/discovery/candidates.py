@@ -290,6 +290,97 @@ def _pick_proposed_name(raw_names: list[str]) -> str:
     return max(raw_names, key=score)
 
 
+# Class-descriptor phrases (from patterns.LITERAL_TERMS) name a *modality*,
+# not a specific compound — "ADC" is not a synonym for any one drug. Left
+# in the union-find identity graph, a bare "ADC" (or "immunoconjugate",
+# etc.) that two unrelated trials both happen to list as an otherName acts
+# as a hub node: since union-find keys are global strings, not scoped to
+# one mention, both trials' real compounds get transitively merged through
+# that shared node. Diagnosed 2026-08-25: one such hub ("adc") merged 1,056
+# trials spanning dozens of genuinely distinct real ADCs — plus assorted
+# unrelated non-ADC dev-code compounds — into a single candidate wrongly
+# labelled "Enfortumab Vedotin (EV)". These terms may still appear in a
+# candidate's raw synonym list for display; they must never drive identity.
+_GENERIC_CLUSTER_TERMS = {t.lower() for t in LITERAL_TERMS}
+
+
+def _is_generic_descriptor(normalized_key: str) -> bool:
+    return normalized_key in _GENERIC_CLUSTER_TERMS
+
+
+def _is_too_short_to_be_specific(normalized_key: str) -> bool:
+    """Short, purely-alphabetic shorthand ("BV", "SG", "TE", "EV", "Pola")
+    is common informal ADC-literature shorthand, but the same 2-4 letter
+    code gets reused by unrelated groups for *different* compounds far
+    more often than a full generic name collides. Diagnosed 2026-08-25:
+    after excluding generic descriptors (above), a second supercluster
+    formed via exactly these short codes acting as the same kind of
+    transitive hub across dozens of unrelated real ADCs. A real
+    compound's cluster is still reachable through its full generic name
+    or a digit-bearing dev code carried in the same mention, so this only
+    removes an untrustworthy shortcut, not real identity signal.
+    """
+    return len(normalized_key) <= 4 and normalized_key.isalpha()
+
+
+def _is_untrusted_identity_key(normalized_key: str) -> bool:
+    """A third hub mechanism, diagnosed 2026-08-25 by tracing the actual
+    union chain that bridged Kadcyla to Adcetris: kadcyla ~ trastuzumab
+    emtansine ~ trastuzumab deruxtecan ~ sacituzumab govitecan ~
+    pembrolizumab ~ adcetris. pembrolizumab is a real, specific, correctly
+    named drug — but it is not an ADC, and it is co-listed as an otherName
+    across dozens of unrelated ADC combination trials, so it links all of
+    its combo-partners to each other. is_denylisted() (patterns.py) was
+    already built for exactly this ("obviously not an ADC") but was only
+    ever applied to strategy 3 acceptance, not to clustering identity for
+    any strategy — a known-non-ADC name in a mention's otherNames still
+    got treated as a synonym of whatever real ADC it was combined with.
+    """
+    return (
+        _is_generic_descriptor(normalized_key)
+        or _is_too_short_to_be_specific(normalized_key)
+        or is_denylisted(normalized_key)
+    )
+
+
+def _looks_specific(key: str) -> bool:
+    """True if `key` looks like it names one particular compound (an
+    INN/USAN suffix hit, or dev-code shaped) rather than a generic
+    target/modality descriptor (e.g. "trop2 adc", "her2 adc") that many
+    unrelated real compounds could legitimately share. Used to gate which
+    multi-word keys are trusted as substring-merge anchors — anchoring on
+    a generic descriptor would transitively fuse distinct assets that
+    merely target the same antigen or share a modality, the same failure
+    mode as the bare "adc" hub above, one level up."""
+    hit = matches_pattern(key)
+    if hit and hit[0] == "suffix":
+        return True
+    return looks_like_dev_code(key.replace(" ", "").replace(",", ""))
+
+
+def _suffixes_in(key: str) -> set:
+    return {term for term in SUFFIX_TERMS if term in key}
+
+
+_COMBO_SEPARATOR_RE = re.compile(r"\s*(?:/|\+|,|&|\band\b|\bplus\b|\bwith\b)\s*")
+
+
+def _names_multiple_specific_compounds(key: str) -> bool:
+    """True if `key` splits (on /, +, ',', '&', "and", "plus", "with")
+    into 2+ segments that each independently look like a specific
+    compound (see _looks_specific) — i.e. this string names a
+    *combination* of two-or-more real, distinct assets rather than being
+    one asset's alternate name or a combo-regimen with one active drug
+    and inert backbone agents (dexamethasone, ixazomib, ... — those
+    segments don't look "specific" on their own, so a regimen like
+    "belantamab mafodotin, dexamethasone, ixazomib" still passes as a
+    single asset here)."""
+    segments = [s for s in _COMBO_SEPARATOR_RE.split(key) if s.strip()]
+    if len(segments) < 2:
+        return False
+    return sum(1 for s in segments if _looks_specific(s.strip())) >= 2
+
+
 def _merge_substring_clusters(uf: UnionFind, all_keys: set[str]) -> None:
     """Second clustering pass: many sponsors put a whole combo-regimen or
     arm description in the intervention-name field instead of a bare drug
@@ -298,28 +389,90 @@ def _merge_substring_clusters(uf: UnionFind, all_keys: set[str]) -> None:
     union alone leaves these as their own singleton clusters even though
     they're clearly the same asset. This merges any key into a
     multi-word "anchor" key it whole-word-contains — deterministic
-    substring containment, not fuzzy/probabilistic matching.
+    substring containment, not fuzzy/probabilistic matching. Anchors are
+    restricted to keys that look like they name one specific compound
+    (see _looks_specific) so a generic descriptor phrase can't drive a
+    merge of unrelated assets.
+
+    Genuine two-ADC combination arms are a fourth failure mode, diagnosed
+    2026-08-25 by tracing the chain that bridged Kadcyla to Trodelvy:
+    a trial literally named "Sacituzumab Govitecan / Trastuzumab
+    Deruxtecan" whole-word-contains BOTH real anchors, so both got unioned
+    into it — fusing two genuinely distinct, unrelated real ADCs. This
+    case is real (per the user: combination trials involving two ADCs
+    need many-to-many trial<->asset modelling, which doesn't exist yet in
+    this candidate-clustering step) and must NOT be resolved by merging.
+    So a key that itself names 2+ specific compounds is excluded from
+    both sides of this pass entirely — it can't anchor a merge, and
+    nothing merges into it — leaving it as its own small unclustered
+    candidate for human adjudication rather than silently fused into
+    either real asset (or, worse, transitively bridging them together).
     """
-    keys_list = sorted(all_keys)
-    anchors = [k for k in keys_list if len(k.split()) >= 2]
+    keys_list = [k for k in sorted(all_keys) if not _names_multiple_specific_compounds(k)]
+    anchors = [k for k in keys_list if len(k.split()) >= 2 and _looks_specific(k)]
     for anchor in anchors:
+        anchor_suffixes = _suffixes_in(anchor)
         boundary_re = None
         for k in keys_list:
             if k == anchor or anchor not in k:
                 continue
+            if _suffixes_in(k) - anchor_suffixes:
+                continue  # k names a different suffix-bearing compound too — a combo, not a synonym
             if boundary_re is None:
                 boundary_re = re.compile(r"(?<!\w)" + re.escape(anchor) + r"(?!\w)")
             if boundary_re.search(k):
                 uf.union(anchor, k)
 
 
+def _identity_keys(m: "Mention") -> list[str]:
+    """Normalised names usable as clustering identity — excludes generic
+    modality/class descriptors and untrustworthy short abbreviations
+    (see _is_untrusted_identity_key)."""
+    keys = sorted({_normalize(n) for n in [m.intervention_name] + m.other_names if n})
+    return [k for k in keys if not _is_untrusted_identity_key(k)]
+
+
+def _mention_spans_multiple_compounds(keys: list[str]) -> bool:
+    """True if this one mention's own keys carry 2+ *distinct* suffix
+    signatures — i.e. it names more than one real, specific compound
+    rather than several aliases of one. Diagnosed 2026-08-25 by tracing
+    the chain that (still) bridged Kadcyla to Enhertu after the
+    denylist/parenthetical fix above: a comparator-arm mention
+    (intervention "Trastuzumab (Herceptin)", otherNames ["Trastuzumab
+    Emtansine", "Trastuzumab Deruxtecan"]) has its bare-antibody name
+    correctly excluded by is_denylisted now, but the *other two* keys are
+    both real, valid, correctly-identified — and correctly DIFFERENT —
+    compounds, sitting right next to each other in the same mention's own
+    key list. The base per-mention union step would fuse them directly
+    regardless of anything the substring-merge pass does. There's no
+    reliable way to tell, from text alone, which of this mention's
+    suffix-less keys (dev codes, brand names) belongs to which of the 2+
+    named compounds — so when this fires, the mention contributes no
+    union information at all; each real compound still clusters
+    correctly through its other, single-compound mentions elsewhere.
+
+    Counts distinct suffixes seen across ALL of the mention's keys taken
+    together, not per-key: a single combo-string key like "Sacituzumab
+    Govitecan / Trastuzumab Deruxtecan" carries two suffixes by itself
+    and must trip this just as surely as two separate single-suffix keys
+    would. (A per-key version missed exactly this, letting that one
+    combo string bridge two real ADCs through a shared brand-name
+    neighbour that itself carries no suffix.)
+    """
+    all_suffixes_seen: set = set()
+    for k in keys:
+        all_suffixes_seen |= _suffixes_in(k)
+    return len(all_suffixes_seen) >= 2
+
+
 def build_candidate_table(mentions: list[Mention]) -> list[CandidateAsset]:
     uf = UnionFind()
     all_keys: set[str] = set()
     for m in mentions:
-        keys = sorted({_normalize(n) for n in [m.intervention_name] + m.other_names if n})
-        for a, b in zip(keys, keys[1:]):
-            uf.union(a, b)
+        keys = _identity_keys(m)
+        if not _mention_spans_multiple_compounds(keys):
+            for a, b in zip(keys, keys[1:]):
+                uf.union(a, b)
         for k in keys:
             uf.find(k)  # ensure registered even if singleton
         all_keys.update(keys)
@@ -328,9 +481,9 @@ def build_candidate_table(mentions: list[Mention]) -> list[CandidateAsset]:
 
     clusters: dict[str, list[Mention]] = {}
     for m in mentions:
-        keys = [_normalize(n) for n in [m.intervention_name] + m.other_names if n]
+        keys = _identity_keys(m)
         if not keys:
-            continue
+            continue  # nothing but a generic descriptor (e.g. bare "ADC") — not an identifiable compound
         root = uf.find(keys[0])
         clusters.setdefault(root, []).append(m)
 

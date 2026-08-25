@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ADC program labelling</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --panel2: #1e232b; --border: #2a313c;
+    --text: #e6e9ef; --muted: #8b94a3; --accent: #4da3ff; --good: #35c98f;
+    --bad: #ff5d6c; --warn: #e8b04b; --mono: "SFMono-Regular", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  #topbar { display: flex; align-items: center; gap: 18px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  #topbar b { color: var(--text); }
+  #topbar .spacer { flex: 1; }
+  #blindToggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  #blindToggle input { accent-color: var(--accent); }
+  #blindToggle.on { color: var(--good); }
+  #blindToggle.off { color: var(--bad); }
+  #timer { font-family: var(--mono); }
+  #helpBtn { cursor: pointer; border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; }
+
+  #layout { display: grid; grid-template-columns: minmax(0,1fr) 380px; gap: 0; height: calc(100vh - 37px); }
+  #left { overflow-y: auto; padding: 18px 22px 90px; }
+  #right { overflow-y: auto; padding: 18px; border-left: 1px solid var(--border); background: var(--panel); }
+
+  h1.name { margin: 0 0 2px; font-size: 22px; }
+  .sub { color: var(--muted); margin-bottom: 14px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); margin-right: 6px; }
+  .badge.provisional { color: var(--warn); border-color: var(--warn); }
+
+  section.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  section.card h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table th, table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table th { color: var(--muted); font-weight: 500; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .status-pill { padding: 1px 6px; border-radius: 4px; font-size: 11px; border: 1px solid var(--border); }
+  .status-TERMINATED, .status-WITHDRAWN, .status-SUSPENDED { color: var(--bad); border-color: var(--bad); }
+  .status-UNKNOWN { color: var(--warn); border-color: var(--warn); }
+  .status-COMPLETED { color: var(--good); border-color: var(--good); }
+  .status-RECRUITING, .status-ACTIVE_NOT_RECRUITING, .status-ENROLLING_BY_INVITATION, .status-NOT_YET_RECRUITING { color: var(--accent); border-color: var(--accent); }
+
+  .timeline-item { display: grid; grid-template-columns: 90px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 12.5px; }
+  .timeline-item:last-child { border-bottom: none; }
+  .timeline-item .d { color: var(--muted); font-family: var(--mono); }
+
+  .links a { display: block; margin-bottom: 4px; }
+
+  /* --- judgement panel --- */
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
+  .choicegrid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .choice { border: 1px solid var(--border); background: var(--panel2); color: var(--text); border-radius: 6px; padding: 6px 9px; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .choice kbd { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+  .choice.selected { background: var(--accent); color: #04121f; border-color: var(--accent); }
+  .choice.selected kbd { color: #04121f; border-color: #04121f; }
+  .choice[disabled] { opacity: .35; cursor: not-allowed; }
+
+  textarea, input[type=date] { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 13px; font-family: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
+  .datepair { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .datepair label.inline { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); text-transform: none; margin: 0; white-space: nowrap; }
+
+  #err { color: var(--bad); font-size: 12.5px; margin: 8px 0; min-height: 1em; }
+
+  .actions { display: flex; gap: 8px; margin-top: 16px; }
+  button.primary { flex: 1; background: var(--good); border: none; color: #04231a; font-weight: 600; padding: 11px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  button.secondary { background: var(--panel2); border: 1px solid var(--border); color: var(--text); padding: 11px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  button.danger { color: var(--bad); }
+
+  #reveal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #reveal.show { display: flex; }
+  #reveal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 22px 26px; width: 380px; }
+  #reveal h3 { margin-top: 0; }
+  .scorebar { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; margin: 8px 0 14px; }
+  .scorebar > div { height: 100%; background: linear-gradient(90deg, var(--good), var(--warn), var(--bad)); }
+  #reveal table { font-size: 12px; }
+
+  #help { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #help.show { display: flex; }
+  #help .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px 26px; width: 440px; font-size: 13px; }
+  #help table td { border: none; padding: 3px 8px; }
+  #help kbd { font-family: var(--mono); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+
+  #done { padding: 60px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span><b id="labelledCount">–</b> / <span id="totalCount">–</span> labelled</span>
+  <span><b id="queueCount">–</b> in fresh queue</span>
+  <span>median <b id="medianSec">–</b>s/label</span>
+  <span id="timer">0.0s</span>
+  <span class="spacer"></span>
+  <label id="blindToggle" class="on"><input type="checkbox" id="blindCheckbox" checked> Blind mode (Alt+B)</label>
+  <span id="helpBtn">? shortcuts</span>
+</div>
+
+<div id="layout">
+  <div id="left">
+    <div id="programView"></div>
+  </div>
+  <div id="right">
+    <div class="field">
+      <label>Program status</label>
+      <div class="choicegrid" id="statusChoices"></div>
+    </div>
+    <div class="field" id="killReasonField" style="display:none">
+      <label>Kill reason</label>
+      <div class="choicegrid" id="killChoices"></div>
+    </div>
+    <div class="field">
+      <label>Confidence</label>
+      <div class="choicegrid" id="confidenceChoices"></div>
+    </div>
+    <div class="field" id="deadDatesField" style="display:none">
+      <label>Dates (required for dead_confirmed)</label>
+      <div class="datepair">
+        <div>
+          <div style="font-size:11px;color:var(--muted)">Label evidence date</div>
+          <input type="date" id="labelEvidenceDate">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted)">Public confirmation date</div>
+          <input type="date" id="publicConfirmationDate">
+        </div>
+      </div>
+      <label class="inline" style="margin-top:6px">
+        <input type="checkbox" id="neverConfirmed"> never publicly confirmed
+      </label>
+    </div>
+    <div class="field">
+      <label>Evidence note</label>
+      <textarea id="evidenceNote" placeholder="Why. Cite what you saw."></textarea>
+    </div>
+    <div id="err"></div>
+    <div class="actions">
+      <button class="secondary" id="skipBtn">Skip (N)</button>
+      <button class="secondary danger" id="invalidBtn">Not an ADC (X)</button>
+    </div>
+    <div class="actions">
+      <button class="primary" id="saveBtn">Save &amp; next (Enter)</button>
+    </div>
+  </div>
+</div>
+
+<div id="reveal">
+  <div class="box">
+    <h3>Saved. Here's what the heuristic thought:</h3>
+    <div>Silence score: <b id="revealScore">–</b> / 100 (band <span id="revealBand">–</span>)</div>
+    <div class="scorebar"><div id="revealBar" style="width:0%"></div></div>
+    <table id="revealBreakdown"></table>
+    <div style="margin-top:10px;color:var(--muted);font-size:12px">Archetypes: <span id="revealArchetypes"></span></div>
+    <div style="margin-top:16px;text-align:right"><button class="secondary" id="revealClose">Continue (any key)</button></div>
+  </div>
+</div>
+
+<div id="help">
+  <div class="box">
+    <h3>Keyboard shortcuts</h3>
+    <table>
+      <tr><td><kbd>1</kbd>–<kbd>6</kbd></td><td>set status</td></tr>
+      <tr><td><kbd>a</kbd>–<kbd>h</kbd></td><td>set kill reason (when status = dead_confirmed)</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd></td><td>confidence high/medium/low</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>save &amp; advance</td></tr>
+      <tr><td><kbd>N</kbd></td><td>skip, come back later</td></tr>
+      <tr><td><kbd>X</kbd></td><td>flag: not a valid ADC candidate</td></tr>
+      <tr><td><kbd>Alt</kbd>+<kbd>B</kbd></td><td>toggle blind mode</td></tr>
+      <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd></td><td>save while typing in the note field</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>close this / close reveal</td></tr>
+    </table>
+    <div style="margin-top:14px;text-align:right"><button class="secondary" id="helpClose">Close</button></div>
+  </div>
+</div>
+
+<div id="done" style="display:none">Queue exhausted — every provisional program has been labelled or flagged.</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

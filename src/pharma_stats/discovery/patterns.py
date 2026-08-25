@@ -99,5 +99,17 @@ def matches_pattern(name: str) -> Optional[tuple[str, str]]:
     return None
 
 
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
 def is_denylisted(name: str) -> bool:
-    return name.strip().lower() in NON_ADC_DENYLIST
+    """Exact match against NON_ADC_DENYLIST, also after stripping one
+    trailing brand-name parenthetical (e.g. "Trastuzumab (Herceptin)" ->
+    "trastuzumab"). Diagnosed 2026-08-25: a comparator arm named exactly
+    that way slipped past the plain exact-match check and went on to
+    bridge two genuinely distinct real ADCs (Kadcyla and Enhertu) into
+    one candidate via clustering identity — see candidates.py."""
+    normalized = name.strip().lower()
+    if normalized in NON_ADC_DENYLIST:
+        return True
+    return _TRAILING_PAREN_RE.sub("", normalized).strip() in NON_ADC_DENYLIST
