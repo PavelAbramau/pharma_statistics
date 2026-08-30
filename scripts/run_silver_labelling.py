@@ -3,6 +3,7 @@
     python scripts/run_silver_labelling.py --limit 5
     python scripts/run_silver_labelling.py --program-ids cand_x,cand_y
     python scripts/run_silver_labelling.py --only-gold-labelled --limit 13
+    python scripts/run_silver_labelling.py --only-gold-labelled --dry-run   # no API calls, no key needed
 
 For the "13 gold-labelled + 20 unlabelled" first run:
 
@@ -141,6 +142,10 @@ def main() -> None:
     ap.add_argument("--model", default=model_client.DEFAULT_MODEL,
                      help=f"default {model_client.DEFAULT_MODEL} — must be a model that accepts "
                           "explicit temperature (Opus 5 / Sonnet 5 / Fable 5 do not)")
+    ap.add_argument("--dry-run", action="store_true",
+                     help="show which programs would be labelled and the API-call budget, make ZERO "
+                          "model calls, write nothing to silver/labels.jsonl. Doesn't need "
+                          "ANTHROPIC_API_KEY or the anthropic package installed.")
     args = ap.parse_args()
 
     programs = pp.load_materialized()
@@ -155,6 +160,19 @@ def main() -> None:
         return
 
     since_date = (date.today() - timedelta(days=args.since_months * 30.44)).isoformat()
+
+    if args.dry_run:
+        print(f"[dry run] Would label {len(selected)} program(s) with model={args.model}, "
+              f"Q1 cutoff since {since_date}. No model calls made, nothing written.\n")
+        for i, program in enumerate(selected):
+            trial_since = evidence.trials_initiated_since(program, since_date)
+            print(f"[{i + 1}/{len(selected)}] {program['proposed_name']} ({program['program_id']}) "
+                  f"— Q1 trial_initiated_since={trial_since} [deterministic, free]")
+        print(f"\nEstimated spend: ~11 model calls/program x {len(selected)} = "
+              f"~{11 * len(selected)} calls (k=5 x 2 sampled questions + 1 red-team pass; "
+              "fewer if Q2/Q3 abstain before red-team runs).")
+        return
+
     print(f"Labelling {len(selected)} program(s) with model={args.model}, Q1 cutoff since {since_date}.")
     print("This spends real API budget: ~11 calls/program (k=5 x 2 sampled questions + 1 red-team pass).")
 

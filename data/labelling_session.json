@@ -2,36 +2,6 @@
   "session_id": "485f0c11-25a7-438d-b9e8-6c5b8442f3f7",
   "created_at": "2026-08-27T16:09:27.292002+00:00",
   "order": [
-    "cand_cd4bfd99f0_blz945",
-    "cand_31beb23d28_gnc-035",
-    "cand_ddf46d97c2_fh-006",
-    "cand_29c1639359_obt076,_a_cd205-directed_antib",
-    "cand_1f5a3593f6_bg-85738",
-    "cand_6c105876a6_tno155",
-    "cand_b6cb183996_bms-986442",
-    "cand_e243b21e13_shr7280",
-    "cand_9e12b129e5_azd1390",
-    "cand_39531ea4b9_sar245409",
-    "cand_6dff8fa1aa_db-1202",
-    "cand_08a0407307_tas266",
-    "cand_01c58c4a47_nazartinib",
-    "cand_ea85c900f3_yl242",
-    "cand_d9f9efb3a6_sibp-a13_formulation_for_injec",
-    "cand_dc953236db_chemotherapeutic_drug,_adc_or_",
-    "cand_46e3d4a51d_buparsilib",
-    "cand_32bb7df7fd_tisotumab_vedotin-tftv",
-    "cand_9e153642fc_qbm076",
-    "cand_2cff2a128d_rinatabart_sesutecan",
-    "cand_1b8cdd381e_hrs-6209",
-    "cand_b9773ed2fd_saf-189s",
-    "cand_db0ffc3fdf_shr-1603",
-    "cand_80c6b93786_sys6043",
-    "cand_82322b6d07_shr-9839",
-    "cand_b1c37624c4_hs-20105",
-    "cand_2d6783c084_bi_765049",
-    "cand_4823874b49_bms-986183",
-    "cand_c3ce57da63_bms-986148",
-    "cand_a5bb1d27e7_bms-986253",
     "cand_2be6859c4c_medi-551",
     "cand_fc72f15141_rc48-adc_plus_bevacizumab",
     "cand_31acacce5c_gs-5829",
@@ -1019,36 +989,30 @@
     "cand_07bc74339c_mrg002",
     "cand_bb425ebaba_shr6390",
     "cand_bed0f970ba_bgb-16673",
-    "cand_81a331bf97_yl217"
+    "cand_81a331bf97_yl217",
+    "cand_21d4203640_jskn016",
+    "cand_e56131f82c_mrg001",
+    "cand_dc953236db_chemotherapeutic_drug,_adc_or_"
   ],
-  "total_served": 89,
+  "total_served": 123,
   "pending_serve": {
-    "e267d852-086e-4f97-9a43-de4d17a1dc77": {
-      "program_id": "cand_21d4203640_jskn016",
-      "band": 1,
-      "archetype": "other",
-      "silence_score": 24,
+    "bfd9ced6-7070-4479-b262-9deac290e91c": {
+      "program_id": "cand_c3ce57da63_bms-986148",
+      "band": 0,
+      "archetype": "completed_no_results",
+      "silence_score": 10,
       "history_coverage": "full",
       "is_repeat_probe": false,
-      "served_at": "2026-08-30T11:31:28.418918+00:00"
+      "served_at": "2026-08-30T14:15:18.522487+00:00"
     },
-    "ab918ac2-081d-438b-83db-dd0d2838a7e3": {
-      "program_id": "cand_9447218101_hrs-3738",
+    "054fd960-5d8f-4259-8623-ad1546e62612": {
+      "program_id": "cand_a5bb1d27e7_bms-986253",
       "band": 0,
       "archetype": "other",
-      "silence_score": 9,
+      "silence_score": 0,
       "history_coverage": "full",
       "is_repeat_probe": false,
-      "served_at": "2026-08-30T11:43:04.996980+00:00"
-    },
-    "7cbe4840-86fc-432b-8c0e-d3b30fd2f8ba": {
-      "program_id": "cand_e56131f82c_mrg001",
-      "band": 1,
-      "archetype": "unknown_status",
-      "silence_score": 25,
-      "history_coverage": "full",
-      "is_repeat_probe": false,
-      "served_at": "2026-08-30T11:43:49.872244+00:00"
+      "served_at": "2026-08-30T14:20:36.009276+00:00"
     }
   },
   "served_log": [
@@ -1931,7 +1895,347 @@
       "is_repeat_probe": false,
       "served_at": "2026-08-30T11:43:49.872244+00:00",
       "serve_token": "7cbe4840-86fc-432b-8c0e-d3b30fd2f8ba"
+    },
+    {
+      "program_id": "cand_e15c4300ce_ibi3014",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 22,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T13:46:39.332739+00:00",
+      "serve_token": "dc6c2bbf-cce2-4dbb-b720-ade64b633779"
+    },
+    {
+      "program_id": "cand_cd4bfd99f0_blz945",
+      "band": 1,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 20,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:47:12.823389+00:00",
+      "serve_token": "d67181d8-4224-4974-a186-d808a3e51078"
+    },
+    {
+      "program_id": "cand_31beb23d28_gnc-035",
+      "band": 1,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 34,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:47:12.839099+00:00",
+      "serve_token": "a187b4db-517c-4031-81d1-910e6e7d044b"
+    },
+    {
+      "program_id": "cand_ddf46d97c2_fh-006",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 30,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:47:29.771004+00:00",
+      "serve_token": "6c14a8a2-9574-4c92-ac26-6a5d31407f2f"
+    },
+    {
+      "program_id": "cand_29c1639359_obt076,_a_cd205-directed_antib",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 34,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:47:47.158230+00:00",
+      "serve_token": "0e02fe6d-0da1-4ffb-83ee-233a8b08348d"
+    },
+    {
+      "program_id": "cand_1f5a3593f6_bg-85738",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 50,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:48:22.468841+00:00",
+      "serve_token": "40d5ea40-0185-4bb5-aff4-7864d5a1881f"
+    },
+    {
+      "program_id": "cand_6c105876a6_tno155",
+      "band": 0,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 2,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:49:59.244164+00:00",
+      "serve_token": "74804f51-0a5d-4034-8384-1d064c9f2bd2"
+    },
+    {
+      "program_id": "cand_b6cb183996_bms-986442",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 0,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:50:39.182377+00:00",
+      "serve_token": "8ed33d17-6f04-46f5-b46c-8d73d76ab9f8"
+    },
+    {
+      "program_id": "cand_e243b21e13_shr7280",
+      "band": 0,
+      "archetype": "completed_no_results",
+      "silence_score": 10,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:50:53.924786+00:00",
+      "serve_token": "269656af-bad5-4a95-b3c0-0580ecb1daa7"
+    },
+    {
+      "program_id": "cand_9e12b129e5_azd1390",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 5,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:51:07.583343+00:00",
+      "serve_token": "3cdfb627-4fbd-4743-a049-0d4883f12651"
+    },
+    {
+      "program_id": "cand_d99232ce21_sgn-75",
+      "band": 1,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 20,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T13:51:19.949370+00:00",
+      "serve_token": "3063abcd-e1f2-446b-983f-340577c0714f"
+    },
+    {
+      "program_id": "cand_39531ea4b9_sar245409",
+      "band": 0,
+      "archetype": "other",
+      "silence_score": 0,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:51:53.717958+00:00",
+      "serve_token": "3edff83a-d0dd-47a7-8025-420258ec2fcd"
+    },
+    {
+      "program_id": "cand_6dff8fa1aa_db-1202",
+      "band": 1,
+      "archetype": "unknown_status",
+      "silence_score": 25,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:55:45.414169+00:00",
+      "serve_token": "612ce65a-e093-4aca-9d3b-8c88a6c6f5ba"
+    },
+    {
+      "program_id": "cand_08a0407307_tas266",
+      "band": 1,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 20,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:56:02.763638+00:00",
+      "serve_token": "7efc105a-6450-4c62-840c-da1892c97ebc"
+    },
+    {
+      "program_id": "cand_01c58c4a47_nazartinib",
+      "band": 1,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 23,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:57:14.394121+00:00",
+      "serve_token": "acbaf620-de9a-4269-b785-b99fbf3e35e9"
+    },
+    {
+      "program_id": "cand_ea85c900f3_yl242",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 25,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T13:57:43.335030+00:00",
+      "serve_token": "4ecd66d9-7218-4801-9cf7-e52af5771a98"
+    },
+    {
+      "program_id": "cand_d9f9efb3a6_sibp-a13_formulation_for_injec",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 23,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:00:45.761724+00:00",
+      "serve_token": "bed86b3c-f7c1-4192-915a-88366abb3235"
+    },
+    {
+      "program_id": "cand_dc953236db_chemotherapeutic_drug,_adc_or_",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 50,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:01:19.645553+00:00",
+      "serve_token": "73cb3702-964f-42dd-88c9-e1b41a92d223"
+    },
+    {
+      "program_id": "cand_46e3d4a51d_buparsilib",
+      "band": 0,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 0,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:03:06.221305+00:00",
+      "serve_token": "55237ab4-fbf0-4c10-a237-acbc040fb556"
+    },
+    {
+      "program_id": "cand_32bb7df7fd_tisotumab_vedotin-tftv",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 2,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:03:25.045774+00:00",
+      "serve_token": "4604fce8-987f-4257-93ca-033dbbb6c018"
+    },
+    {
+      "program_id": "cand_504b444e56_pembrolizumab_+_enfortumab_ved",
+      "band": 0,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 2,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T14:04:22.256186+00:00",
+      "serve_token": "0b19e2f5-5aa3-43ea-b62c-684d4999ee67"
+    },
+    {
+      "program_id": "cand_9e153642fc_qbm076",
+      "band": 0,
+      "archetype": "completed_no_results",
+      "silence_score": 10,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:05:11.572198+00:00",
+      "serve_token": "12e10ce5-35a1-4640-bc1a-4dd2b2b9145f"
+    },
+    {
+      "program_id": "cand_2cff2a128d_rinatabart_sesutecan",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 1,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:05:56.061820+00:00",
+      "serve_token": "312e32dc-83fb-40fd-ae32-d7cb4f36e4d7"
+    },
+    {
+      "program_id": "cand_1b8cdd381e_hrs-6209",
+      "band": 0,
+      "archetype": "other",
+      "silence_score": 17,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:09:58.217661+00:00",
+      "serve_token": "3f91ef6f-5e46-45af-8466-c396a41953d4"
+    },
+    {
+      "program_id": "cand_b9773ed2fd_saf-189s",
+      "band": 1,
+      "archetype": "unknown_status",
+      "silence_score": 25,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:10:26.298674+00:00",
+      "serve_token": "9d01c1a5-34d7-4b3d-8172-1ca2cbf37d59"
+    },
+    {
+      "program_id": "cand_db0ffc3fdf_shr-1603",
+      "band": 1,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 25,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:10:51.772410+00:00",
+      "serve_token": "b91395a6-112d-4d39-9ad2-7a1445fa8258"
+    },
+    {
+      "program_id": "cand_80c6b93786_sys6043",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 28,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:11:20.080394+00:00",
+      "serve_token": "e928c329-203e-4b57-8026-c0bbdd9dd8ee"
+    },
+    {
+      "program_id": "cand_82322b6d07_shr-9839",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 28,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:11:42.902866+00:00",
+      "serve_token": "cabafa88-8c5d-4b39-b775-57e6f9f6c603"
+    },
+    {
+      "program_id": "cand_b1c37624c4_hs-20105",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 50,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:12:10.460826+00:00",
+      "serve_token": "2b7f6603-f066-4f0b-8b5c-24b46882e8c8"
+    },
+    {
+      "program_id": "cand_2d6783c084_bi_765049",
+      "band": 0,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 2,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:13:15.938558+00:00",
+      "serve_token": "d16e159e-5691-45d3-8dfa-121e7c0afb03"
+    },
+    {
+      "program_id": "cand_456c540aaf_bnt3212",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 8,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T14:14:38.796864+00:00",
+      "serve_token": "9133c33c-77ce-43bf-8453-651efa09d25f"
+    },
+    {
+      "program_id": "cand_4823874b49_bms-986183",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 0,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:14:54.294317+00:00",
+      "serve_token": "ee46346b-0543-4392-89b8-f3dd671e7de6"
+    },
+    {
+      "program_id": "cand_c3ce57da63_bms-986148",
+      "band": 0,
+      "archetype": "completed_no_results",
+      "silence_score": 10,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:15:18.522487+00:00",
+      "serve_token": "bfd9ced6-7070-4479-b262-9deac290e91c"
+    },
+    {
+      "program_id": "cand_a5bb1d27e7_bms-986253",
+      "band": 0,
+      "archetype": "other",
+      "silence_score": 0,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T14:20:36.009276+00:00",
+      "serve_token": "054fd960-5d8f-4259-8623-ad1546e62612"
     }
   ],
-  "_last_repeat_id": "cand_80082f67cb_rc118-adc"
+  "_last_repeat_id": "cand_456c540aaf_bnt3212"
 }
