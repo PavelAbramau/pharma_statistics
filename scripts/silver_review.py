@@ -112,7 +112,14 @@ def _render_question_log(title: str, log: dict) -> str:
 
 def _render_red_team(log) -> str:
     if not log:
-        return ""
+        return ""  # legacy record predating the status gate — nothing logged either way
+    if log.get("skipped"):
+        return f"""
+<div class="red-team">
+  <b>Red Team</b> {_badge("gated — not run", "agree")}
+  <div style="color:var(--muted, #888)">{html.escape(log.get("reason", ""))}</div>
+</div>
+"""
     objection = log.get("objection") or {}
     forced = objection.get("strength") == "strong" and objection.get("citations")
     cls = "red-team forced" if forced else "red-team"
@@ -164,12 +171,17 @@ def render_card(record: dict, gold_by_pid: dict) -> str:
         _render_question_log("Q4 — successor asset?", answers.get("successor_asset", {})),
     ])
 
+    cost_line = (
+        f'cost: ${record.get("cost_usd", 0.0):.4f} ({record.get("calls", 0)} call(s), '
+        f'{record.get("input_tokens", 0)}+{record.get("output_tokens", 0)} tokens)'
+    )
     return f"""
 <div class="card">
   <h2>{html.escape(record.get("proposed_name") or "(unnamed)")}</h2>
   <div class="pid">{html.escape(record["program_id"])} — silver event {html.escape(record["event_id"])}</div>
   <div class="verdict {verdict_cls}">{verdict_text}</div>
   <div class="rule-path">rule_path: {html.escape(record.get("rule_path") or "")}</div>
+  <div class="rule-path">{html.escape(cost_line)}</div>
   {_render_gold_reference(gold_by_pid.get(record["program_id"]))}
   {questions_html}
   {_render_red_team(record.get("red_team_objection"))}

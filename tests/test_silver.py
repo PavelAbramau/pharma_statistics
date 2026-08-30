@@ -12,6 +12,7 @@ from pharma_stats.labelling import store
 from pharma_stats.silver import citations, eval as silver_eval, evidence, prompts, questions
 from pharma_stats.silver import red_team, retrieval_agent, sampling
 from pharma_stats.silver import store as silver_store
+from pharma_stats.silver import model_client
 from pharma_stats.silver.questions import (
     NOT_DETERMINABLE,
     Citation,
@@ -21,6 +22,10 @@ from pharma_stats.silver.questions import (
     SuccessorAssetAnswer,
     TrialInitiatedSinceAnswer,
 )
+
+
+def _usage(input_tokens: int = 100, output_tokens: int = 20, model: str = model_client.DEFAULT_MODEL):
+    return model_client.Usage(input_tokens=input_tokens, output_tokens=output_tokens, model=model)
 
 
 # ---------------------------------------------------------- gold/silver isolation --
@@ -246,6 +251,29 @@ def test_sample_answers_calls_question_fn_k_times():
     assert len(calls) == 5
 
 
+def test_sample_answers_adaptive_stops_at_initial_k_on_agreement():
+    calls = []
+
+    def question_fn():
+        calls.append(1)
+        return "x"
+
+    result = sampling.sample_answers_adaptive(question_fn, initial_k=3, escalated_k=5)
+    assert result == ["x"] * 3
+    assert len(calls) == 3  # samples 4-5 never drawn — unanimous at 3
+
+
+def test_sample_answers_adaptive_escalates_on_disagreement():
+    votes = iter(["a", "b", "a", "a", "b"])
+
+    def question_fn():
+        return next(votes)
+
+    result = sampling.sample_answers_adaptive(question_fn, initial_k=3, escalated_k=5)
+    assert len(result) == 5  # disagreed at k=3 (a,b,a) -> escalated to the full 5
+    assert result == ["a", "b", "a", "a", "b"]
+
+
 # --------------------------------------------------------------- red team --
 
 def test_forces_abstention_requires_strong_and_evidenced():
@@ -265,10 +293,10 @@ def test_forces_abstention_requires_strong_and_evidenced():
 def test_generate_objection_strong_with_verified_citation(monkeypatch):
     monkeypatch.setattr(
         red_team.model_client, "complete",
-        lambda prompt, **kw: '{"strength": "strong", "argument": "x", "nct_id": "NCT1", "quote": "y"}',
+        lambda prompt, **kw: ('{"strength": "strong", "argument": "x", "nct_id": "NCT1", "quote": "y"}', _usage()),
     )
     monkeypatch.setattr(red_team.citation_gate, "resolve_and_verify", lambda c: True)
-    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    objection, log = red_team.generate_objection({"status": "dead_confirmed"}, {"trials": []})
     assert objection.strength == "strong"
     assert len(objection.citations) == 1
     assert red_team.forces_abstention(objection) is True
@@ -279,20 +307,41 @@ def test_generate_objection_strong_with_verified_citation(monkeypatch):
 def test_generate_objection_downgrades_strong_with_failed_citation(monkeypatch):
     monkeypatch.setattr(
         red_team.model_client, "complete",
-        lambda prompt, **kw: '{"strength": "strong", "argument": "x", "nct_id": "NCT1", "quote": "y"}',
+        lambda prompt, **kw: ('{"strength": "strong", "argument": "x", "nct_id": "NCT1", "quote": "y"}', _usage()),
     )
     monkeypatch.setattr(red_team.citation_gate, "resolve_and_verify", lambda c: False)
-    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    objection, log = red_team.generate_objection({"status": "dead_confirmed"}, {"trials": []})
     assert objection.strength == "weak"  # downgraded — an unverifiable citation can't back "strong"
     assert objection.citations == []
     assert red_team.forces_abstention(objection) is False
 
 
 def test_generate_objection_handles_unparseable_response(monkeypatch):
-    monkeypatch.setattr(red_team.model_client, "complete", lambda prompt, **kw: "not json")
-    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    monkeypatch.setattr(red_team.model_client, "complete", lambda prompt, **kw: ("not json", _usage()))
+    objection, log = red_team.generate_objection({"status": "dead_confirmed"}, {"trials": []})
     assert objection.strength == "weak"
     assert red_team.forces_abstention(objection) is False
+
+
+def test_generate_objection_skipped_for_ungated_status(monkeypatch):
+    called = []
+    monkeypatch.setattr(red_team.model_client, "complete", lambda prompt, **kw: called.append(1) or ("{}", _usage()))
+    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    assert objection is None
+    assert log["skipped"] is True
+    assert "active" in log["reason"]
+    assert called == []  # no API call at all — gated before it would have fired
+    assert red_team.forces_abstention(objection) is False
+
+
+def test_generate_objection_gates_superseded_too(monkeypatch):
+    monkeypatch.setattr(
+        red_team.model_client, "complete",
+        lambda prompt, **kw: ('{"strength": "weak", "argument": "x", "nct_id": null, "quote": null}', _usage()),
+    )
+    objection, log = red_team.generate_objection({"status": "superseded"}, {"trials": []})
+    assert not log.get("skipped")
+    assert objection is not None
 
 
 # ---------------------------------------------------------- retrieval agent --
@@ -345,6 +394,30 @@ def test_evidence_text_handles_no_trials():
     assert evidence.evidence_text({"trials": [], "timeline": []}) == "(no trial data on file for this program)"
 
 
+def test_build_evidence_trims_timeline_prioritising_terminal_transition():
+    # 20 low-value arm_added events plus one terminal status_changed from
+    # early on — the terminal transition must survive the trim even though
+    # it's the oldest event, and the total must be capped at MAX_TIMELINE_EVENTS
+    arm_events = [
+        {"nct_id": "NCT1", "date": f"2023-01-{i:02d}", "event_type": "arm_added", "label": "arm added"}
+        for i in range(1, 21)
+    ]
+    terminal_event = {
+        "nct_id": "NCT1", "date": "2020-01-01", "event_type": "status_changed",
+        "label": "status changed", "to_value": "TERMINATED",
+    }
+    program = {"trials": [], "timeline": [terminal_event] + arm_events}
+    ev = evidence.build_evidence(program)
+    assert len(ev["timeline"]) == evidence.MAX_TIMELINE_EVENTS
+    assert any(e["event_type"] == "status_changed" for e in ev["timeline"])
+
+
+def test_build_evidence_keeps_all_events_under_the_cap():
+    events = [{"nct_id": "NCT1", "date": "2024-01-01", "event_type": "arm_added", "label": "x"}]
+    ev = evidence.build_evidence({"trials": [], "timeline": events})
+    assert len(ev["timeline"]) == 1
+
+
 def test_trials_initiated_since():
     program = {"trials": [{"start_date": "2023-06-01"}, {"start_date": "2020-01-01"}]}
     assert evidence.trials_initiated_since(program, "2022-01-01") is True
@@ -362,7 +435,7 @@ def test_ask_discontinuation_statement_unanimous_yes_with_valid_citation(monkeyp
     }
     ev = evidence.build_evidence(program)
     response = '{"exists": true, "statement_date": "2024-01-01", "nct_id": "NCT1", "quote": "Lack of efficacy."}'
-    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: response)
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: (response, _usage()))
     monkeypatch.setattr(prompts.citation_gate, "resolve_and_verify", lambda c: True)
 
     answer, log = prompts.ask_discontinuation_statement("Drug X", ev)
@@ -370,7 +443,11 @@ def test_ask_discontinuation_statement_unanimous_yes_with_valid_citation(monkeyp
     assert answer.statement_date == "2024-01-01"
     assert len(answer.citations) == 1
     assert log["disagreement"] is False
-    assert len(log["raw_responses"]) == 5
+    # unanimous at initial_k=3 — no need to escalate to 5 (see silver/sampling.py)
+    assert len(log["raw_responses"]) == prompts.INITIAL_K == 3
+    assert log["k"] == 3
+    assert log["escalated"] is False
+    assert log["usage"]["calls"] == 3
 
 
 def test_ask_discontinuation_statement_disagreement_abstains(monkeypatch):
@@ -382,16 +459,19 @@ def test_ask_discontinuation_statement_disagreement_abstains(monkeypatch):
         '{"exists": false, "statement_date": null, "nct_id": null, "quote": null}',
         '{"exists": true, "statement_date": null, "nct_id": "NCT1", "quote": "x"}',
     ])
-    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: next(responses))
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: (next(responses), _usage()))
     answer, log = prompts.ask_discontinuation_statement("Drug X", ev)
     assert answer.exists == questions.NOT_DETERMINABLE
     assert log["disagreement"] is True
+    # first 3 (true/false/true) already disagree — escalates to the full 5
+    assert log["k"] == 5
+    assert log["escalated"] is True
 
 
 def test_ask_discontinuation_statement_yes_but_citation_fails_abstains(monkeypatch):
     ev = evidence.build_evidence({"trials": [], "timeline": []})
     response = '{"exists": true, "statement_date": "2024-01-01", "nct_id": "NCT1", "quote": "made up quote"}'
-    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: response)
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: (response, _usage()))
     monkeypatch.setattr(prompts.citation_gate, "resolve_and_verify", lambda c: False)
     answer, log = prompts.ask_discontinuation_statement("Drug X", ev)
     assert answer.exists == questions.NOT_DETERMINABLE
@@ -401,11 +481,12 @@ def test_ask_discontinuation_statement_yes_but_citation_fails_abstains(monkeypat
 def test_ask_stop_reason_unanimous_with_valid_citation(monkeypatch):
     ev = evidence.build_evidence({"trials": [], "timeline": []})
     response = '{"category": "safety", "nct_id": "NCT1", "quote": "toxicity observed"}'
-    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: response)
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: (response, _usage()))
     monkeypatch.setattr(prompts.citation_gate, "resolve_and_verify", lambda c: True)
     answer, log = prompts.ask_stop_reason("Drug X", ev)
     assert answer.category == "safety"
     assert len(answer.citations) == 1
+    assert log["k"] == 3
 
 
 def test_ask_successor_asset_always_abstains_no_api_call(monkeypatch):

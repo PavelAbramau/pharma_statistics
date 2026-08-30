@@ -21,6 +21,7 @@ from pharma_stats.labelling import trial_scope as ts
 STAGE = "universe"
 KNOWN_ADCS_PATH = REPO_ROOT / "tests" / "fixtures" / "known_adcs.txt"
 STRATEGY_ORDER = ["pattern_match", "seed_expansion", "sponsor_expansion"]
+SILENCE_SCORE_SPIKE_THRESHOLD = 0.15
 
 
 def _word_boundary_contains(haystack: str, needle: str) -> bool:
@@ -44,6 +45,7 @@ def run() -> list[Check]:
     checks += _heme_solid_span_report()
     checks += _heme_only_auto_exclusion_agreement()
     checks += _current_state_read_boundary()
+    checks += _silence_score_dead_zone_check()
     return checks
 
 
@@ -206,6 +208,46 @@ def _mesh_coverage_gate() -> list[Check]:
         detail="below threshold: a heme_only/spans-both count from this little coverage is not a "
                "real result, and scripts/apply_auto_scope_exclusions.py refuses to run until this "
                "clears — run scripts/fetch_current_state.py to raise coverage.",
+    )]
+
+
+def _silence_score_dead_zone_check() -> list[Check]:
+    """WARN if more than SILENCE_SCORE_SPIKE_THRESHOLD of scored programs
+    share one exact silence_score value. A spike like that means some
+    component is hard-gating on a status string (all-or-nothing) rather
+    than scaling continuously — exactly the bug where every COMPLETED
+    trial scored an identical, exact 0 on staleness AND verification_lapse
+    regardless of how stale it actually was, because both were gated to
+    ACTIVE_LIKE_STATUSES only. Catches a regression of that shape
+    automatically instead of relying on someone eyeballing a histogram."""
+    programs = pp.load_materialized()
+    scored = [p["silence_score"] for p in programs if p.get("silence_score") is not None]
+    name = f"silence-score dead-zone check (WARN if one value > {SILENCE_SCORE_SPIKE_THRESHOLD:.0%} of programs)"
+    if not scored:
+        return [info(
+            STAGE, name,
+            expected="provisional_programs materialized with at least one scored program",
+            actual="none scored yet", detail="",
+        )]
+
+    counts: dict[int, int] = {}
+    for s in scored:
+        counts[s] = counts.get(s, 0) + 1
+    worst_value, worst_count = max(counts.items(), key=lambda kv: kv[1])
+    share = worst_count / len(scored)
+
+    level = warn if share > SILENCE_SCORE_SPIKE_THRESHOLD else ok
+    return [level(
+        STAGE, name,
+        expected=f"no single silence_score value held by more than {SILENCE_SCORE_SPIKE_THRESHOLD:.0%} "
+                 "of scored programs",
+        actual=f"score={worst_value} held by {worst_count}/{len(scored)} programs ({share:.1%})",
+        detail=(
+            "a spike this size at one exact value usually means a component in "
+            "compute_silence_score (provisional_programs.py) is hard-gating on a status string "
+            "instead of scaling continuously — check each _*_subscore function against every "
+            "status it's actually seeing, not just the ones it was designed for."
+        ) if share > SILENCE_SCORE_SPIKE_THRESHOLD else "",
     )]
 
 

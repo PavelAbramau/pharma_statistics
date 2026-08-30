@@ -37,7 +37,17 @@ def build_stratified_order(programs: list[dict], exclude_ids: set[str]) -> list[
     for p in programs:
         if p["program_id"] in exclude_ids:
             continue
-        key = (p["band"], p["primary_archetype"])
+        # band is None when compute_silence_score had no resolvable trial
+        # snapshot at all (provisional_programs.py) — never a real score, so
+        # never one of the 5 real bands (stats.stratum_progress excludes
+        # these from label-target/coverage counting for the same reason).
+        # It must still be SERVABLE, though: this is exactly the case the
+        # app's own "history_coverage != full -> requeue" guard exists to
+        # handle gracefully once a later backfill resolves the snapshot, so
+        # it gets its own synthetic bucket rather than being dropped from
+        # the queue entirely.
+        band_key = p["band"] if p["band"] is not None else "unscored"
+        key = (band_key, p["primary_archetype"])
         cells.setdefault(key, []).append(p["program_id"])
 
     rng = random.Random(0)

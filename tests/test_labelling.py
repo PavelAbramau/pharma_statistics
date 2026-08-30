@@ -179,6 +179,75 @@ def test_scoring_and_archetypes(warehouse):
     assert 0 <= by_id["cand_vague"]["silence_score"] <= 100
 
 
+def _trial(status, **overrides) -> pp.TrialSummary:
+    defaults = dict(
+        nct_id="NCT_X", status=status, phases=["PHASE2"], why_stopped=None,
+        enrollment_count=100, enrollment_type="ACTUAL", conditions=["Breast Cancer"],
+        sponsor="Acme Oncology", start_date=date(2018, 1, 1),
+        primary_completion_date=date(2020, 1, 1), primary_completion_type="ACTUAL",
+        completion_date=date(2020, 1, 1), completion_type="ACTUAL",
+        last_update_post_date=date(2020, 6, 1), status_verified_date=date(2020, 6, 1),
+        has_results=False, source_snapshot="latest",
+    )
+    defaults.update(overrides)
+    return pp.TrialSummary(**defaults)
+
+
+def test_compute_silence_score_no_trials_returns_none_not_a_midpoint():
+    score, breakdown = pp.compute_silence_score([], as_of=date(2026, 8, 19))
+    assert score is None
+    assert pp._band_for_score(score) is None
+
+
+def test_compute_silence_score_completed_trial_is_not_a_dead_zone():
+    # the bug: COMPLETED is in neither ACTIVE_LIKE_STATUSES nor
+    # TERMINAL_STOP_STATUSES, so staleness/verification_lapse both
+    # hard-returned 0.0 regardless of how stale the record actually was.
+    fresh = _trial("COMPLETED", last_update_post_date=date(2026, 8, 1))
+    stale = _trial("COMPLETED", last_update_post_date=date(2019, 1, 1))
+    fresh_score, fresh_bd = pp.compute_silence_score([fresh], as_of=date(2026, 8, 19))
+    stale_score, stale_bd = pp.compute_silence_score([stale], as_of=date(2026, 8, 19))
+    assert stale_bd["staleness"] > 0
+    assert stale_score > fresh_score
+
+
+def test_compute_silence_score_terminated_with_actual_enrollment_is_not_all_zero():
+    # the bug: a TERMINATED trial with a stated reason AND ACTUAL enrolment
+    # scored exactly 0 on all four components — no path to score anything.
+    t = _trial(
+        "TERMINATED",
+        why_stopped="The independent data monitoring committee recommended stopping the trial "
+                    "after an interim analysis showed the experimental arm did not meet the "
+                    "pre-specified efficacy threshold.",
+        enrollment_type="ACTUAL", last_update_post_date=date(2019, 1, 1),
+    )
+    score, breakdown = pp.compute_silence_score([t], as_of=date(2026, 8, 19))
+    assert score > 0
+    assert breakdown["staleness"] > 0
+
+
+def test_compute_silence_score_explained_terminal_discounted_vs_unexplained():
+    same_date = date(2019, 1, 1)
+    explained = _trial(
+        "TERMINATED", why_stopped="Interim analysis showed no meaningful difference in overall "
+                                  "survival between the two treatment arms of this study.",
+        last_update_post_date=same_date,
+    )
+    unexplained = _trial("TERMINATED", why_stopped=None, last_update_post_date=same_date)
+    explained_score, _ = pp.compute_silence_score([explained], as_of=date(2026, 8, 19))
+    unexplained_score, _ = pp.compute_silence_score([unexplained], as_of=date(2026, 8, 19))
+    assert explained_score < unexplained_score
+
+
+def test_compute_silence_score_status_ambiguity_aggregates_across_all_trials():
+    # a multi-trial asset's second trial (UNKNOWN) must contribute even
+    # though it isn't the most-recently-touched one
+    clean = _trial("RECRUITING", last_update_post_date=date(2026, 8, 1))
+    unknown = _trial("UNKNOWN", nct_id="NCT_Y", last_update_post_date=date(2018, 1, 1))
+    score, breakdown = pp.compute_silence_score([clean, unknown], as_of=date(2026, 8, 19))
+    assert breakdown["status_ambiguity"] == pp.STATUS_AMBIGUITY_WEIGHT  # max subscore (UNKNOWN) = 1.0
+
+
 def test_genuine_combo_trial_excluded_from_both_assets_not_assigned_to_either(warehouse):
     con = duckdb.connect(str(warehouse))
     # two independently-verified real assets sharing one trial — the
@@ -284,6 +353,42 @@ def test_validate_label_payload_requires_dead_confirmed_fields():
     })  # should not raise
 
     store.validate_label_payload({"action": "skip"})  # should not raise
+
+
+def test_validate_label_payload_requires_confirmation_evidence_type_with_confirmation_date():
+    base = {
+        "action": "label", "gate_reached": 3, "is_adc": "yes", "in_scope": "yes",
+        "status": "dead_confirmed", "confidence": "high",
+        "kill_reason": "futility_efficacy", "label_evidence_date": "2024-01-01",
+        "history_coverage_at_serve_time": "full", "public_confirmation_date": "2024-03-01",
+    }
+    with pytest.raises(store.ValidationError):
+        store.validate_label_payload(base)  # missing confirmation_evidence_type
+
+    with pytest.raises(store.ValidationError):
+        store.validate_label_payload({**base, "confirmation_evidence_type": "not_a_real_type"})
+
+    store.validate_label_payload({**base, "confirmation_evidence_type": "press_release"})  # should not raise
+    # the ambiguous case is a legitimate value, not an error
+    store.validate_label_payload({**base, "confirmation_evidence_type": "pipeline_page_removal"})
+
+    # never_publicly_confirmed (no confirmation date at all) needs no evidence type
+    never_confirmed = {**base, "public_confirmation_date": None, "never_publicly_confirmed": True}
+    store.validate_label_payload(never_confirmed)
+
+
+def test_validate_label_payload_third_party_fields_must_be_paired():
+    base = {"action": "label", "gate_reached": 3, "is_adc": "yes", "in_scope": "yes", "status": "active",
+            "confidence": "high", "history_coverage_at_serve_time": "full"}
+    with pytest.raises(store.ValidationError):
+        store.validate_label_payload({**base, "third_party_first_noted_date": "2024-01-01"})  # no source
+    with pytest.raises(store.ValidationError):
+        store.validate_label_payload({**base, "third_party_source": "Citeline"})  # no date
+
+    store.validate_label_payload(base)  # neither given — fine
+    store.validate_label_payload({
+        **base, "third_party_first_noted_date": "2024-01-01", "third_party_source": "Citeline",
+    })  # both given — fine
 
 
 def test_validate_label_payload_gate1_rejection_is_terminal():
@@ -753,7 +858,7 @@ def test_validate_label_payload_auto_decided_scope_rejection():
     """decided_by=auto is the only path that can save a scope decision
     without is_adc — see trial_scope.auto_scope_decision."""
     with pytest.raises(store.ValidationError):
-        # auto is only valid at gate 2
+        # every decided_by=auto record must say which triage layer decided it
         store.validate_label_payload({
             "action": "label", "gate_reached": 1, "decided_by": "auto", "is_adc": "no",
         })
@@ -761,24 +866,63 @@ def test_validate_label_payload_auto_decided_scope_rejection():
         # auto records must be in_scope=no
         store.validate_label_payload({
             "action": "label", "gate_reached": 2, "decided_by": "auto", "in_scope": "yes",
+            "triage_layer": 1,
         })
     with pytest.raises(store.ValidationError):
         store.validate_label_payload({
             "action": "label", "gate_reached": 2, "decided_by": "auto", "in_scope": "no",
+            "triage_layer": 1,
         })  # missing scope_reason
+    with pytest.raises(store.ValidationError):
+        # decided_by=auto is never valid at gate 3
+        store.validate_label_payload({
+            "action": "label", "gate_reached": 3, "decided_by": "auto", "triage_layer": 1,
+        })
 
     store.validate_label_payload({
-        "action": "label", "gate_reached": 2, "decided_by": "auto",
+        "action": "label", "gate_reached": 2, "decided_by": "auto", "triage_layer": 1,
         "in_scope": "no", "scope_reason": "heme_only",
     })  # should not raise, is_adc absent entirely
 
     record = store.build_record(
         {"action": "label", "program_id": "p1", "gate_reached": 2, "decided_by": "auto",
-         "in_scope": "no", "scope_reason": "heme_only"},
+         "triage_layer": 1, "in_scope": "no", "scope_reason": "heme_only"},
         session_id="s1", served_stratum={},
     )
     assert record["decided_by"] == "auto"
     assert record["is_adc"] is None
+
+
+def test_validate_label_payload_auto_decided_is_adc_rejection():
+    """decided_by=auto at gate 1: only a confident is_adc=no verdict is a
+    valid terminal record — see pharma_stats.triage."""
+    with pytest.raises(store.ValidationError):
+        # is_adc=yes is never terminal at gate 1, auto or human
+        store.validate_label_payload({
+            "action": "label", "gate_reached": 1, "decided_by": "auto",
+            "triage_layer": 1, "is_adc": "yes",
+        })
+    with pytest.raises(store.ValidationError):
+        # "unsure" is never committed — it escalates to the next layer or
+        # the human queue, never saved as a decision
+        store.validate_label_payload({
+            "action": "label", "gate_reached": 1, "decided_by": "auto",
+            "triage_layer": 2, "is_adc": "unsure",
+        })
+
+    store.validate_label_payload({
+        "action": "label", "gate_reached": 1, "decided_by": "auto",
+        "triage_layer": 1, "is_adc": "no",
+    })  # should not raise
+
+    record = store.build_record(
+        {"action": "label", "program_id": "p1", "gate_reached": 1, "decided_by": "auto",
+         "triage_layer": 1, "triage_rule": "layer1_denylist", "is_adc": "no"},
+        session_id="s1", served_stratum={},
+    )
+    assert record["decided_by"] == "auto"
+    assert record["triage_layer"] == 1
+    assert record["triage_rule"] == "layer1_denylist"
 
 
 def test_has_adc_naming_suffix():

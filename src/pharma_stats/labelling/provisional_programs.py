@@ -28,6 +28,7 @@ a prediction.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -58,6 +59,31 @@ ACTIVE_LIKE_STATUSES = {
     "NOT_YET_RECRUITING",
 }
 TERMINAL_STOP_STATUSES = {"TERMINATED", "WITHDRAWN", "SUSPENDED"}
+
+# --- silence score weights ---------------------------------------------
+# Each component below is computed as a normalised 0-1 sub-score first
+# (see the _*_subscore functions), then multiplied by its weight here.
+# Weights are the ONLY place scale lives — a component function must never
+# bake a cap/divisor into its own return value. They sum to 100 so the
+# final score reads as "percentage of maximum plausible silence."
+STALENESS_WEIGHT = 45
+VERIFICATION_LAPSE_WEIGHT = 8
+STATUS_AMBIGUITY_WEIGHT = 27
+ENROLLMENT_SIGNAL_WEIGHT = 20
+assert STALENESS_WEIGHT + VERIFICATION_LAPSE_WEIGHT + STATUS_AMBIGUITY_WEIGHT + ENROLLMENT_SIGNAL_WEIGHT == 100
+
+STALENESS_TAU_DAYS = 365.0  # exponential saturation time-constant — see _staleness_subscore
+VERIFICATION_LAPSE_DAYS_CAP = 365  # 1 year since last re-verification = maximally lapsed
+# Status implies the record should carry a last-update date but none is on
+# file — genuinely unknown, not "fresh" (0) and not "maximally stale" (1).
+MISSING_DATE_STALENESS_SUBSCORE = 0.5
+# An EXPLAINED terminal stop (a stated, non-vague why_stopped) is
+# accounted-for silence: the sponsor said why it stopped moving, which is
+# different evidence than a record that just went quiet. Discount, don't
+# zero — a long-explained termination should still rank below an active
+# program gone silent for the same stretch, not read as identical to a
+# just-terminated one with the same why_stopped.
+EXPLAINED_TERMINAL_STALENESS_DISCOUNT = 0.3
 
 _VAGUE_WHY_STOPPED_PATTERNS = (
     "business reason", "business decision", "strategic reason",
@@ -324,54 +350,101 @@ def _latest_trial(trials: list[TrialSummary]) -> TrialSummary:
     return max(trials, key=key)
 
 
+def _staleness_subscore(t: TrialSummary, as_of: date) -> float:
+    """0-1: how long since this trial's record was last touched, for EVERY
+    status — days-since-last-update is the project's core signal and must
+    not be gated on a status string (that was the dead-zone bug: COMPLETED
+    trials, which are neither ACTIVE_LIKE nor TERMINAL_STOP, hard-scored
+    zero here regardless of staleness). A terminal status with a stated,
+    non-vague reason discounts the raw value (accounted-for silence);
+    anything else — active, completed, unexplained/vague terminal — scores
+    on the raw days alone.
+
+    Exponential saturation (1 - e^-days/tau), not a linear clamp to a fixed
+    cap: this project's trials range from days to ~20 years stale (2012+
+    universe), and a hard cap turns every "at least this stale" trial —
+    which was most of the 2-year-cap's ceiling — into the exact same value,
+    a second dead zone at 1.0 instead of 0.0. The exponential keeps
+    differentiating arbitrarily-stale trials from each other; it never
+    exactly reaches 1.0 for finite days, so ties only happen at genuinely
+    identical day-counts."""
+    if t.last_update_post_date is None:
+        return MISSING_DATE_STALENESS_SUBSCORE
+    days = max((as_of - t.last_update_post_date).days, 0)
+    raw = 1.0 - math.exp(-days / STALENESS_TAU_DAYS)
+    if t.status in TERMINAL_STOP_STATUSES and t.why_stopped and not _is_vague(t.why_stopped):
+        return raw * EXPLAINED_TERMINAL_STALENESS_DISCOUNT
+    return raw
+
+
+def _verification_lapse_subscore(t: TrialSummary, as_of: date) -> float:
+    """0-1: a distinct, much smaller "sponsor stopped attesting" signal —
+    only meaningful for a record CT.gov expects to be periodically
+    re-verified while it's still nominally active. Correlates ~0.9 with
+    staleness in this project's own EDA (both measure "time since this
+    record was touched"), so it carries a small weight rather than being
+    zeroed for non-active trials or dropped outright — see module docstring."""
+    if t.status not in ACTIVE_LIKE_STATUSES or not t.status_verified_date:
+        return 0.0
+    days = (as_of - t.status_verified_date).days
+    return _clamp(days / VERIFICATION_LAPSE_DAYS_CAP, 0.0, 1.0)
+
+
+def _status_ambiguity_subscore(t: TrialSummary, as_of: date) -> float:
+    """0-1 for a SINGLE trial — compute_silence_score takes the max across
+    every trial on the asset, not just the latest, so a multi-trial asset's
+    evidence isn't thrown away. Ratios preserved from the original point
+    scale (25/20/10/10 out of a 25-point max)."""
+    if t.status == "UNKNOWN":
+        return 1.0
+    if t.status in TERMINAL_STOP_STATUSES and not t.why_stopped:
+        return 0.8
+    if t.status in TERMINAL_STOP_STATUSES and _is_vague(t.why_stopped):
+        return 0.4
+    if t.status == "COMPLETED" and not t.has_results and t.completion_date and \
+            (as_of - t.completion_date).days > 730:
+        return 0.4
+    return 0.0
+
+
+def _enrollment_signal_subscore(t: TrialSummary) -> float:
+    """0-1 for a SINGLE trial — record never updated actual enrollment
+    despite stopping. Aggregated via max across all trials, same as
+    status ambiguity."""
+    if t.status in TERMINAL_STOP_STATUSES and t.enrollment_type == "ESTIMATED":
+        return 1.0
+    if t.status == "COMPLETED" and t.enrollment_type == "ESTIMATED":
+        return 1 / 3
+    return 0.0
+
+
 def compute_silence_score(
     trials: list[TrialSummary], as_of: date,
-) -> tuple[int, dict]:
+) -> tuple[Optional[int], dict]:
+    """Returns (score, breakdown). score is None — not an arbitrary
+    midpoint — when there are no resolvable trial snapshots at all; the
+    caller must exclude None-score programs from banding rather than park
+    them at a fake 50."""
     if not trials:
-        return 50, {"note": "no trial snapshot available for this candidate's nct_ids"}
+        return None, {"note": "no trial snapshot available for this candidate's nct_ids"}
 
+    # Staleness and verification lapse describe "is the sponsor still
+    # touching this record" — that's an asset-is-alive-if-any-trial-is
+    # question, so both look only at the most recently touched trial.
+    # Status ambiguity and enrollment signal are per-trial evidence that a
+    # multi-trial asset shouldn't lose by only looking at one trial, so
+    # those aggregate (max) across every trial on file.
     latest = _latest_trial(trials)
-    breakdown: dict[str, float] = {}
-
-    # 1. staleness: days since the sponsor last touched a still-nominally-active record
-    if latest.status in ACTIVE_LIKE_STATUSES and latest.last_update_post_date:
-        days = (as_of - latest.last_update_post_date).days
-        breakdown["staleness"] = round(_clamp(days / 18, 0, 40), 1)
-    elif latest.status in ACTIVE_LIKE_STATUSES:
-        breakdown["staleness"] = 20.0  # active status but no update date on file
-    else:
-        breakdown["staleness"] = 0.0
-
-    # 2. status ambiguity
-    if any(t.status == "UNKNOWN" for t in trials):
-        breakdown["status_ambiguity"] = 25.0
-    elif latest.status in TERMINAL_STOP_STATUSES and not latest.why_stopped:
-        breakdown["status_ambiguity"] = 20.0
-    elif latest.status in TERMINAL_STOP_STATUSES and _is_vague(latest.why_stopped):
-        breakdown["status_ambiguity"] = 10.0
-    elif latest.status in TERMINAL_STOP_STATUSES:
-        breakdown["status_ambiguity"] = 0.0
-    elif latest.status == "COMPLETED" and not latest.has_results and latest.completion_date and \
-            (as_of - latest.completion_date).days > 730:
-        breakdown["status_ambiguity"] = 10.0
-    else:
-        breakdown["status_ambiguity"] = 0.0
-
-    # 3. enrollment signal: record never updated actual enrollment despite stopping
-    if latest.status in TERMINAL_STOP_STATUSES and latest.enrollment_type == "ESTIMATED":
-        breakdown["enrollment_signal"] = 15.0
-    elif latest.status == "COMPLETED" and latest.enrollment_type == "ESTIMATED":
-        breakdown["enrollment_signal"] = 5.0
-    else:
-        breakdown["enrollment_signal"] = 0.0
-
-    # 4. verification lapse: how long since the sponsor last re-verified an active record
-    if latest.status in ACTIVE_LIKE_STATUSES and latest.status_verified_date:
-        days = (as_of - latest.status_verified_date).days
-        breakdown["verification_lapse"] = round(_clamp(days / 24, 0, 15), 1)
-    else:
-        breakdown["verification_lapse"] = 0.0
-
+    breakdown = {
+        "staleness": round(_staleness_subscore(latest, as_of) * STALENESS_WEIGHT, 1),
+        "verification_lapse": round(_verification_lapse_subscore(latest, as_of) * VERIFICATION_LAPSE_WEIGHT, 1),
+        "status_ambiguity": round(
+            max(_status_ambiguity_subscore(t, as_of) for t in trials) * STATUS_AMBIGUITY_WEIGHT, 1
+        ),
+        "enrollment_signal": round(
+            max(_enrollment_signal_subscore(t) for t in trials) * ENROLLMENT_SIGNAL_WEIGHT, 1
+        ),
+    }
     score = round(min(100.0, sum(breakdown.values())))
     return int(score), breakdown
 
@@ -412,7 +485,9 @@ def _primary_archetype(tags: list[str]) -> str:
     return "other"
 
 
-def _band_for_score(score: int) -> int:
+def _band_for_score(score: Optional[int]) -> Optional[int]:
+    if score is None:
+        return None  # no resolvable trials — excluded from banding, not parked at a midpoint
     for i, (lo, hi) in enumerate(SCORE_BANDS):
         if lo <= score < hi:
             return i
@@ -554,6 +629,13 @@ def build_program(
     scope_values = list(trial_scope.values())
     scope_category = ts.classify_asset(scope_values)
 
+    # sponsor_class_overrides.json takes precedence over CT.gov's raw,
+    # sponsor-selected leadSponsor.class everywhere downstream — both the
+    # non_industry_sponsor_hint scope signal and what the review screen
+    # displays read effective_class off this enriched list, never the
+    # candidate row's raw sponsors_over_time directly.
+    sponsors_over_time = ts.apply_sponsor_class_overrides(candidate_row["sponsors_over_time"])
+
     score, breakdown = compute_silence_score(trials, as_of)
     archetypes = classify_archetypes(trials)
     latest = _latest_trial(trials) if trials else None
@@ -594,7 +676,7 @@ def build_program(
         "indication_code": "UNSPECIFIED",
         "line_of_therapy": "unspecified",
         "provisional": True,
-        "sponsors_over_time": candidate_row["sponsors_over_time"],
+        "sponsors_over_time": sponsors_over_time,
         "trial_count": len(trials),
         "nct_ids": included_ids,
         "excluded_shared_trials": excluded_shared_trials,
@@ -611,7 +693,7 @@ def build_program(
         "trial_has_mesh": trial_has_mesh,
         "trial_text_hint": trial_text_hint,
         "non_oncology_hint": ts.is_non_oncology_asset(scope_values),
-        "non_industry_sponsor_hint": ts.is_non_industry_sponsor(candidate_row["sponsors_over_time"]),
+        "non_industry_sponsor_hint": ts.is_non_industry_sponsor(sponsors_over_time),
         "history_coverage": history_coverage,
         "trial_coverage": trial_coverage,
         "silence_score": score,

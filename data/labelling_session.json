@@ -2,46 +2,6 @@
   "session_id": "485f0c11-25a7-438d-b9e8-6c5b8442f3f7",
   "created_at": "2026-08-27T16:09:27.292002+00:00",
   "order": [
-    "cand_2be6859c4c_medi-551",
-    "cand_fc72f15141_rc48-adc_plus_bevacizumab",
-    "cand_31acacce5c_gs-5829",
-    "cand_721e10f59d_abbv-319",
-    "cand_53f7255b54_ba3071",
-    "cand_3e72481fc1_hdm2005",
-    "cand_c8adc785a4_etbx-051",
-    "cand_95df726b6a_azd2811",
-    "cand_7f1e0e51fd_lm716",
-    "cand_c52e6d4158_asp2138",
-    "cand_60ea4ba7ee_bi_836858",
-    "cand_563d6b8109_trastuzumab_emtansine_for_inje",
-    "cand_478e9d3007_tak-243",
-    "cand_165a0e0096_mk-6837",
-    "cand_175481925b_ibrx-042_(had5-hpv_e6.etsd-ire",
-    "cand_3859db4bec_syh2095",
-    "cand_c6b14da4e3_bnt151",
-    "cand_ad77890d80_recombinant_all_human_anti_nec",
-    "cand_91540520e4_autologous_dendritic_cell_(adc",
-    "cand_b2397362c6_hlx17",
-    "cand_013e1b5f60_selinexor",
-    "cand_330640d7d3_recombinant_humanized_anti-egf",
-    "cand_bd2b7a6f03_gs-9901",
-    "cand_8adf85b098_dp303c_treatment",
-    "cand_bda207dcef_recombinant_humanized_anti_tro",
-    "cand_2e5ef2bcf7_hdm2006",
-    "cand_7ac22a2665_bnt141",
-    "cand_b25f47ec8b_bms-986218",
-    "cand_407f721d79_gdc-0084",
-    "cand_a74d814f3a_bms-986315",
-    "cand_cd62f9575d_dhes0815a",
-    "cand_d95f571f32_ibi305",
-    "cand_8106d17d6f_bms-275291",
-    "cand_f917797822_sys6002",
-    "cand_424a76d7ec_ssgj-708",
-    "cand_476ceecb7f_sss06",
-    "cand_4edc09fbba_rgt100",
-    "cand_1e45935039_gen1286",
-    "cand_fcd0acaa63_bat7104",
-    "cand_d03e37bca3_antibody-drug_conjugate_therap",
     "cand_c807fd15b5_hlx02",
     "cand_1f18f1c6d4_induction_without_brentuximab_",
     "cand_389e714575_bms-275183",
@@ -992,27 +952,25 @@
     "cand_81a331bf97_yl217",
     "cand_21d4203640_jskn016",
     "cand_e56131f82c_mrg001",
-    "cand_dc953236db_chemotherapeutic_drug,_adc_or_"
+    "cand_dc953236db_chemotherapeutic_drug,_adc_or_",
+    "cand_a5bb1d27e7_bms-986253",
+    "cand_2be6859c4c_medi-551",
+    "cand_165a0e0096_mk-6837",
+    "cand_175481925b_ibrx-042_(had5-hpv_e6.etsd-ire",
+    "cand_1e45935039_gen1286",
+    "cand_3859db4bec_syh2095",
+    "cand_fcd0acaa63_bat7104"
   ],
-  "total_served": 123,
+  "total_served": 167,
   "pending_serve": {
-    "bfd9ced6-7070-4479-b262-9deac290e91c": {
-      "program_id": "cand_c3ce57da63_bms-986148",
+    "8e0bf290-9860-4458-9683-9907324098f7": {
+      "program_id": "cand_d03e37bca3_antibody-drug_conjugate_therap",
       "band": 0,
-      "archetype": "completed_no_results",
-      "silence_score": 10,
+      "archetype": "actively_amended",
+      "silence_score": 15,
       "history_coverage": "full",
       "is_repeat_probe": false,
-      "served_at": "2026-08-30T14:15:18.522487+00:00"
-    },
-    "054fd960-5d8f-4259-8623-ad1546e62612": {
-      "program_id": "cand_a5bb1d27e7_bms-986253",
-      "band": 0,
-      "archetype": "other",
-      "silence_score": 0,
-      "history_coverage": "full",
-      "is_repeat_probe": false,
-      "served_at": "2026-08-30T14:20:36.009276+00:00"
+      "served_at": "2026-08-30T18:45:18.383887+00:00"
     }
   },
   "served_log": [
@@ -2235,7 +2193,447 @@
       "is_repeat_probe": false,
       "served_at": "2026-08-30T14:20:36.009276+00:00",
       "serve_token": "054fd960-5d8f-4259-8623-ad1546e62612"
+    },
+    {
+      "program_id": "cand_2be6859c4c_medi-551",
+      "band": 0,
+      "archetype": "other",
+      "silence_score": 0,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T16:42:42.913084+00:00",
+      "serve_token": "0fac0cdf-a7ff-4982-bd33-ac46b5f43681"
+    },
+    {
+      "program_id": "cand_fc72f15141_rc48-adc_plus_bevacizumab",
+      "band": 3,
+      "archetype": "unknown_status",
+      "silence_score": 69,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:08:05.522665+00:00",
+      "serve_token": "2cb6795b-e168-4f28-b7d0-2a68470907a2"
+    },
+    {
+      "program_id": "cand_31acacce5c_gs-5829",
+      "band": 3,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 67,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:08:05.533959+00:00",
+      "serve_token": "ea3ac2e9-0c16-4138-9860-19842fc2da64"
+    },
+    {
+      "program_id": "cand_721e10f59d_abbv-319",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 26,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:09:03.054948+00:00",
+      "serve_token": "f2594b84-e0b7-4c5e-b871-e7abb86000a2"
+    },
+    {
+      "program_id": "cand_53f7255b54_ba3071",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 40,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:09:32.465176+00:00",
+      "serve_token": "69f2875c-515e-47b2-b2aa-0e42b78db1c9"
+    },
+    {
+      "program_id": "cand_3e72481fc1_hdm2005",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 40,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:10:11.959381+00:00",
+      "serve_token": "16f2ff51-5677-470e-8dcc-f2d045c56261"
+    },
+    {
+      "program_id": "cand_d9f9efb3a6_sibp-a13_formulation_for_injec",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 27,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T17:10:29.089012+00:00",
+      "serve_token": "52b0b738-e0dd-4d1f-8047-04c9eebd0713"
+    },
+    {
+      "program_id": "cand_c8adc785a4_etbx-051",
+      "band": 1,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 21,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:10:58.260543+00:00",
+      "serve_token": "9bb79980-da3a-40da-97e9-2bd022593485"
+    },
+    {
+      "program_id": "cand_95df726b6a_azd2811",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 8,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:13:06.435645+00:00",
+      "serve_token": "3f469953-ed4b-41ee-921b-22f2f9751dac"
+    },
+    {
+      "program_id": "cand_7f1e0e51fd_lm716",
+      "band": 2,
+      "archetype": "completed_no_results",
+      "silence_score": 56,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:18:26.264439+00:00",
+      "serve_token": "c1340fd7-4761-4061-ba76-8895aebf580d"
+    },
+    {
+      "program_id": "cand_c52e6d4158_asp2138",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 6,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:18:40.084049+00:00",
+      "serve_token": "4d8faa6c-51e1-4764-8fec-656ac021468b"
+    },
+    {
+      "program_id": "cand_60ea4ba7ee_bi_836858",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 36,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:27:46.477625+00:00",
+      "serve_token": "58a04e75-7023-4d16-98ea-1b5cbb8b0d42"
+    },
+    {
+      "program_id": "cand_563d6b8109_trastuzumab_emtansine_for_inje",
+      "band": 1,
+      "archetype": "unknown_status",
+      "silence_score": 34,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:28:01.671819+00:00",
+      "serve_token": "90432b3e-99b3-4b66-88b8-7ca76120ebb6"
+    },
+    {
+      "program_id": "cand_478e9d3007_tak-243",
+      "band": 3,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 67,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:28:14.998770+00:00",
+      "serve_token": "bcbb17a3-8ac1-485f-800e-1c0384c5709a"
+    },
+    {
+      "program_id": "cand_165a0e0096_mk-6837",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 28,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:30:22.831446+00:00",
+      "serve_token": "11acc5fb-5a74-4149-b89d-58b3c1d221cc"
+    },
+    {
+      "program_id": "cand_175481925b_ibrx-042_(had5-hpv_e6.etsd-ire",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 33,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:31:04.494280+00:00",
+      "serve_token": "b848d152-a358-4c93-8190-856d82c5b41e"
+    },
+    {
+      "program_id": "cand_a7b9270711_against_her_2-adc_drug",
+      "band": null,
+      "archetype": "other",
+      "silence_score": null,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T17:39:21.737548+00:00",
+      "serve_token": "c34c1292-8b5f-49db-af92-2e8902e4004f"
+    },
+    {
+      "program_id": "cand_3859db4bec_syh2095",
+      "band": null,
+      "archetype": "other",
+      "silence_score": null,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:39:21.748905+00:00",
+      "serve_token": "6e728709-d98a-477f-becf-238cb1b509ab"
+    },
+    {
+      "program_id": "cand_c6b14da4e3_bnt151",
+      "band": 2,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 42,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:59:35.485691+00:00",
+      "serve_token": "b909c9b3-61f6-40d9-9ebf-2c9162c38bcf"
+    },
+    {
+      "program_id": "cand_ad77890d80_recombinant_all_human_anti_nec",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 4,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:59:35.499902+00:00",
+      "serve_token": "b1cf6ef2-77bc-4fb1-b381-52ea45c4c64d"
+    },
+    {
+      "program_id": "cand_91540520e4_autologous_dendritic_cell_(adc",
+      "band": 0,
+      "archetype": "completed_no_results",
+      "silence_score": 6,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T17:59:54.185883+00:00",
+      "serve_token": "9366cf75-407d-490a-b2f3-563fa7f8bde5"
+    },
+    {
+      "program_id": "cand_b2397362c6_hlx17",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 2,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:00:02.554840+00:00",
+      "serve_token": "2dbe4d6d-8cf9-4515-b745-a148524eefcb"
+    },
+    {
+      "program_id": "cand_013e1b5f60_selinexor",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 42,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:00:11.792807+00:00",
+      "serve_token": "de890066-af2a-4f15-b701-445904f8e385"
+    },
+    {
+      "program_id": "cand_330640d7d3_recombinant_humanized_anti-egf",
+      "band": 3,
+      "archetype": "unknown_status",
+      "silence_score": 70,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:00:25.286763+00:00",
+      "serve_token": "bcf229b9-3f44-4e28-9aaf-6d09f09ae058"
+    },
+    {
+      "program_id": "cand_bd2b7a6f03_gs-9901",
+      "band": 3,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 67,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:00:47.199852+00:00",
+      "serve_token": "d24e3c65-390a-45e8-be6c-44702b37064b"
+    },
+    {
+      "program_id": "cand_8adf85b098_dp303c_treatment",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 30,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:00:51.200136+00:00",
+      "serve_token": "a267fde6-4834-42d9-bafc-f2945e7222e2"
+    },
+    {
+      "program_id": "cand_ad6718be1f_yl202",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 10,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T18:01:01.711830+00:00",
+      "serve_token": "1991712f-162b-4df9-85b4-69eac22c637b"
+    },
+    {
+      "program_id": "cand_bda207dcef_recombinant_humanized_anti_tro",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 24,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:01:33.977636+00:00",
+      "serve_token": "8b67b406-c0ec-49ff-95ac-2ac5b3a1c521"
+    },
+    {
+      "program_id": "cand_2e5ef2bcf7_hdm2006",
+      "band": null,
+      "archetype": "other",
+      "silence_score": null,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:02:03.378065+00:00",
+      "serve_token": "39f61fc7-0693-4752-bc2f-b8aa84d4d8ac"
+    },
+    {
+      "program_id": "cand_7ac22a2665_bnt141",
+      "band": 2,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 49,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:02:23.562035+00:00",
+      "serve_token": "1edf3717-f69d-4b7a-836a-e92288a77fc1"
+    },
+    {
+      "program_id": "cand_b25f47ec8b_bms-986218",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 10,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:02:42.295866+00:00",
+      "serve_token": "c1003c1b-7e7a-47e2-b834-5a3c997e8b63"
+    },
+    {
+      "program_id": "cand_407f721d79_gdc-0084",
+      "band": 2,
+      "archetype": "completed_no_results",
+      "silence_score": 56,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:02:56.021439+00:00",
+      "serve_token": "c4dfe86a-8b8d-40e7-b7de-0472e9568738"
+    },
+    {
+      "program_id": "cand_a74d814f3a_bms-986315",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 23,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:03:10.626284+00:00",
+      "serve_token": "20bf8149-c671-4a37-8ae2-6279487cc7c1"
+    },
+    {
+      "program_id": "cand_cd62f9575d_dhes0815a",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 39,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:03:21.215475+00:00",
+      "serve_token": "37e0abd3-8dde-45fb-a881-b6cc7d530dfa"
+    },
+    {
+      "program_id": "cand_d95f571f32_ibi305",
+      "band": 3,
+      "archetype": "unknown_status",
+      "silence_score": 69,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:03:32.409763+00:00",
+      "serve_token": "29d6ef04-1ee0-4548-8600-445169e00794"
+    },
+    {
+      "program_id": "cand_8106d17d6f_bms-275291",
+      "band": 3,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 67,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:03:58.693156+00:00",
+      "serve_token": "444216cd-5183-45dd-b767-d3eefb57ba0a"
+    },
+    {
+      "program_id": "cand_7b892da09e_ign853",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 33,
+      "history_coverage": "full",
+      "is_repeat_probe": true,
+      "served_at": "2026-08-30T18:04:04.842563+00:00",
+      "serve_token": "0521e132-f940-4be1-8894-3feb41116efa"
+    },
+    {
+      "program_id": "cand_f917797822_sys6002",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 30,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:04:19.896573+00:00",
+      "serve_token": "7c8c103f-0d6b-40a4-b309-9b3104e28229"
+    },
+    {
+      "program_id": "cand_424a76d7ec_ssgj-708",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 39,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:05:19.162665+00:00",
+      "serve_token": "13c54902-6c41-4c73-88e2-3478d82c392f"
+    },
+    {
+      "program_id": "cand_476ceecb7f_sss06",
+      "band": null,
+      "archetype": "other",
+      "silence_score": null,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:06:24.616748+00:00",
+      "serve_token": "0148f003-b474-428d-bf53-f78fdc728103"
+    },
+    {
+      "program_id": "cand_4edc09fbba_rgt100",
+      "band": 2,
+      "archetype": "registry_terminated_vague_reason",
+      "silence_score": 56,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:06:45.810606+00:00",
+      "serve_token": "d6553d9e-d23b-4030-b554-3d81ee34ede8"
+    },
+    {
+      "program_id": "cand_1e45935039_gen1286",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 2,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:07:02.210774+00:00",
+      "serve_token": "452c6ac2-c67d-44ba-a3cd-249b423b8108"
+    },
+    {
+      "program_id": "cand_fcd0acaa63_bat7104",
+      "band": 2,
+      "archetype": "completed_no_results",
+      "silence_score": 49,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:07:16.510164+00:00",
+      "serve_token": "822f9eab-eba1-4893-86a1-80fad43864b0"
+    },
+    {
+      "program_id": "cand_d03e37bca3_antibody-drug_conjugate_therap",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 15,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-08-30T18:45:18.383887+00:00",
+      "serve_token": "8e0bf290-9860-4458-9683-9907324098f7"
     }
   ],
-  "_last_repeat_id": "cand_456c540aaf_bnt3212"
+  "_last_repeat_id": "cand_7b892da09e_ign853"
 }

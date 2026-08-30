@@ -17,7 +17,8 @@ from typing import Callable, TypeVar
 
 T = TypeVar("T")
 
-DEFAULT_K = 5
+DEFAULT_INITIAL_K = 3
+DEFAULT_ESCALATED_K = 5
 
 
 def majority_vote(samples: list[T]) -> tuple[T, int]:
@@ -40,7 +41,9 @@ def should_abstain(samples: list[T]) -> bool:
     return count < len(samples)
 
 
-def sample_answers(question_fn: Callable[[], T], k: int = DEFAULT_K, temperature: float = 0.7) -> list[T]:
+def sample_answers(
+    question_fn: Callable[[], T], k: int = DEFAULT_INITIAL_K, temperature: float = 0.7,
+) -> list[T]:
     """Draw k independent samples of one decomposed question by calling
     question_fn k times. `temperature` is accepted for interface/logging
     parity with the design (it's documented as part of the sampling
@@ -49,3 +52,22 @@ def sample_answers(question_fn: Callable[[], T], k: int = DEFAULT_K, temperature
     prompt/temperature/model, so the actual API call and its temperature
     live there, not in this generic aggregation loop."""
     return [question_fn() for _ in range(k)]
+
+
+def sample_answers_adaptive(
+    question_fn: Callable[[], T], *, initial_k: int = DEFAULT_INITIAL_K,
+    escalated_k: int = DEFAULT_ESCALATED_K, temperature: float = 0.7,
+) -> list[T]:
+    """Sample initial_k first; draw the remaining (escalated_k - initial_k)
+    ONLY if those disagree. This is deterministic JSON extraction over a
+    fixed evidence bundle, not creative generation — observed runs came
+    back unanimous at k=5 on both decomposed questions essentially every
+    time, meaning samples 4 and 5 were pure waste whenever the first 3
+    already agreed. Returns whatever was actually drawn (initial_k on
+    agreement, escalated_k on disagreement) — len(result) IS the actual k
+    for this call; log it rather than a fixed constant."""
+    samples = sample_answers(question_fn, k=initial_k, temperature=temperature)
+    if escalated_k <= initial_k or not should_abstain(samples):
+        return samples
+    samples = samples + sample_answers(question_fn, k=escalated_k - initial_k, temperature=temperature)
+    return samples

@@ -15,6 +15,8 @@ from typing import Optional
 def stratum_progress(programs: list[dict], labelled_ids: set[str]) -> list[dict]:
     cells: dict[tuple[int, str], dict] = {}
     for p in programs:
+        if p["band"] is None:
+            continue  # no resolvable trial snapshot — never scored, so never stratified (see queue.py)
         key = (p["band"], p["primary_archetype"])
         cells.setdefault(key, {"band": p["band"], "archetype": p["primary_archetype"], "total": 0, "labelled": 0})
         cells[key]["total"] += 1

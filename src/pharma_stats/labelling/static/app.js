@@ -120,10 +120,24 @@ function trialScopeCheckHtml(p) {
     </div>`;
 }
 
+function sponsorClassLine(p) {
+  const list = p.sponsors_over_time || [];
+  if (!list.length) return `<div class="sponsor-line">Sponsor: none on file</div>`;
+  const parts = list.map(s => {
+    const cls = s.effective_class || s.class || "UNKNOWN";
+    const overridden = s.class_overridden ? ` <span title="sponsor_class_overrides.json">(overridden from ${esc(s.class || "?")})</span>` : "";
+    return `${esc(s.sponsor)} <span class="cls">[${esc(cls)}]</span>${overridden}`;
+  });
+  const cls = p.non_industry_sponsor_hint ? "sponsor-line flagged" : "sponsor-line";
+  return `<div class="${cls}">Sponsor: ${parts.join(" &nbsp;·&nbsp; ")}</div>`;
+}
+
 function renderProgram(p) {
-  const sponsors = (p.sponsors_over_time || []).map(s =>
-    `<tr><td>${esc(s.sponsor)}</td><td>${esc(s.class || "")}</td><td>${esc(s.first_seen || "")}</td><td>${esc(s.last_seen || "")}</td></tr>`
-  ).join("");
+  const sponsors = (p.sponsors_over_time || []).map(s => {
+    const cls = s.effective_class || s.class || "";
+    const rawNote = s.class_overridden ? ` <span style="color:var(--muted)">(raw: ${esc(s.class || "?")})</span>` : "";
+    return `<tr><td>${esc(s.sponsor)}</td><td>${esc(cls)}${rawNote}</td><td>${esc(s.first_seen || "")}</td><td>${esc(s.last_seen || "")}</td></tr>`;
+  }).join("");
 
   const trials = (p.trials || []).map(t => {
     const cov = (p.trial_coverage || {})[t.nct_id] || "none";
@@ -189,6 +203,7 @@ function renderProgram(p) {
       ${discoveryBadge}
       ${revealBadge}
     </div>
+    ${sponsorClassLine(p)}
     ${p.synonyms.length ? `<div class="sub">Synonyms: ${esc(p.synonyms.join(", "))}</div>` : ""}
 
     <section class="card">
@@ -262,6 +277,13 @@ function buildChoiceButtons() {
     `<button class="choice" data-kind="confidence" data-value="${c}"><kbd>${confLabels[c]}</kbd>${c}</button>`
   ).join("");
 
+  // mouse-only — no free keyboard letters left at gate 3 (abcdefgh is kill_reason, 123/shift+123 are status/confidence)
+  // (state.vocab.confirmation_evidence_types || []): a stale server predating this field must never
+  // throw here and abort the rest of this function — that would silently unbind every OTHER button too
+  $("confirmationEvidenceChoices").innerHTML = (state.vocab.confirmation_evidence_types || []).map(t =>
+    `<button class="choice" data-kind="confirmation_evidence_type" data-value="${t}">${t}</button>`
+  ).join("");
+
   document.querySelectorAll(".choice").forEach(btn => btn.addEventListener("click", () => {
     const { kind, value } = btn.dataset;
     if (kind === "is_adc") { chooseIsAdc(value); return; }
@@ -279,7 +301,12 @@ function setField(kind, value) {
     const isDead = value === "dead_confirmed";
     $("killReasonField").style.display = isDead ? "block" : "none";
     $("deadDatesField").style.display = isDead ? "block" : "none";
-    if (!isDead) { state.form.kill_reason = null; document.querySelectorAll('.choice[data-kind="kill_reason"]').forEach(b => b.classList.remove("selected")); }
+    if (!isDead) {
+      state.form.kill_reason = null;
+      state.form.confirmation_evidence_type = null;
+      document.querySelectorAll('.choice[data-kind="kill_reason"]').forEach(b => b.classList.remove("selected"));
+      document.querySelectorAll('.choice[data-kind="confirmation_evidence_type"]').forEach(b => b.classList.remove("selected"));
+    }
   }
   $("err").textContent = "";
 }
@@ -341,6 +368,7 @@ function resetForm() {
   state.form = {
     status: null, kill_reason: null, confidence: null,
     is_adc: null, in_scope: null, scope_reason: null,
+    confirmation_evidence_type: null,
   };
   state.firstStatusSelected = null;
   state.externalLinkClicked = false;
@@ -353,6 +381,8 @@ function resetForm() {
   $("labelEvidenceDate").value = "";
   $("publicConfirmationDate").value = "";
   $("neverConfirmed").checked = false;
+  $("thirdPartyFirstNotedDate").value = "";
+  $("thirdPartySource").value = "";
   $("err").textContent = "";
 }
 
@@ -387,7 +417,10 @@ async function submitLabel(gateReached) {
     evidence_note: $("evidenceNote").value,
     label_evidence_date: $("labelEvidenceDate").value || null,
     public_confirmation_date: $("publicConfirmationDate").value || null,
+    confirmation_evidence_type: state.form.confirmation_evidence_type,
     never_publicly_confirmed: $("neverConfirmed").checked,
+    third_party_first_noted_date: $("thirdPartyFirstNotedDate").value || null,
+    third_party_source: $("thirdPartySource").value || null,
     blind: state.blind,
     seconds_spent: secondsSpent(),
     // pass-2 revision: only meaningful at gate 3, and only if they actually

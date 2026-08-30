@@ -12,6 +12,47 @@ evidence that doesn't exist is the point.
 """
 from __future__ import annotations
 
+# Cap on timeline events sent to the model — a dozen arm_added/arm_removed
+# lines contribute nothing to either decomposed question and just burn
+# input tokens. why_stopped and current status are always included
+# regardless (they live on the per-trial record in build_evidence, never
+# in this trimmed timeline), so this cap never risks losing them.
+MAX_TIMELINE_EVENTS = 15
+_PRIORITY_EVENT_TYPES = {"status_changed", "enrollment_target_changed", "completion_date_pushed"}
+_TERMINAL_STATUS_VALUES = {"TERMINATED", "WITHDRAWN", "SUSPENDED", "COMPLETED"}
+
+
+def _event_priority(e: dict) -> int:
+    """0 = a status_changed event landing on a terminal status (the
+    single strongest silence/kill signal there is), 1 = the other
+    decision-relevant event types, 2 = everything else (arm changes,
+    generic amendments, ...)."""
+    if e.get("event_type") == "status_changed" and (e.get("to_value") or "") in _TERMINAL_STATUS_VALUES:
+        return 0
+    if e.get("event_type") in _PRIORITY_EVENT_TYPES:
+        return 1
+    return 2
+
+
+def _trim_timeline(events: list[dict]) -> list[dict]:
+    """Keep the MAX_TIMELINE_EVENTS most decision-relevant events, not
+    just the most recent N chronologically — a terminal transition from
+    18 months ago must not be pushed out by a dozen recent arm_added
+    lines. Within a priority tier, most-recent-first; the kept set is
+    re-sorted chronologically ascending afterward for readable output."""
+    if len(events) <= MAX_TIMELINE_EVENTS:
+        return sorted(events, key=lambda e: e.get("date") or "")
+
+    tiers: dict[int, list[dict]] = {}
+    for e in events:
+        tiers.setdefault(_event_priority(e), []).append(e)
+
+    kept: list[dict] = []
+    for tier in sorted(tiers):
+        kept.extend(sorted(tiers[tier], key=lambda e: e.get("date") or "", reverse=True))
+    kept = kept[:MAX_TIMELINE_EVENTS]
+    return sorted(kept, key=lambda e: e.get("date") or "")
+
 
 def citation_locator(nct_id: str, source_snapshot: "str | None") -> str:
     """The snapshot key a claim about this trial can actually be verified
@@ -39,10 +80,12 @@ def build_evidence(program: dict) -> dict:
             "start_date": t.get("start_date"),
             "source_snapshot": t.get("source_snapshot"),
         })
+    raw_events = [e for e in program.get("timeline", []) if e.get("event_type")]
+    trimmed = _trim_timeline(raw_events)
     timeline = [
         {"nct_id": e.get("nct_id"), "date": e.get("date"), "event_type": e.get("event_type"),
          "label": e.get("label")}
-        for e in program.get("timeline", []) if e.get("event_type")
+        for e in trimmed
     ]
     return {"trials": trials, "timeline": timeline}
 

@@ -116,7 +116,7 @@ def main() -> None:
         body = {
             "action": "label", "program_id": p["program_id"],
             "candidate_id": p["candidate_id"], "proposed_name": p["proposed_name"],
-            "gate_reached": 2,
+            "gate_reached": 2, "triage_layer": 1, "triage_rule": "layer1_mesh_heme_only",
             "discovery_strategy": p.get("discovery_strategy"),
             "match_strength": p.get("match_strength"), "matched_term": p.get("matched_term"),
             **decision,

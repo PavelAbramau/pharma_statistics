@@ -24,8 +24,8 @@ from typing import Any, Optional
 
 from pharma_stats.config import GOLD_DIR
 from pharma_stats.labelling.vocab import (
-    APP_VERSION, IN_SCOPE_VALUES, IS_ADC_VALUES, KILL_REASONS, PROGRAM_STATUSES,
-    SCOPE_OUT_REASONS,
+    APP_VERSION, CONFIRMATION_EVIDENCE_TYPES, IN_SCOPE_VALUES, IS_ADC_VALUES, KILL_REASONS,
+    PROGRAM_STATUSES, SCOPE_OUT_REASONS, TRIAGE_LAYERS,
 )
 
 LABELS_PATH = GOLD_DIR / "labels.jsonl"
@@ -52,26 +52,55 @@ def validate_label_payload(payload: dict) -> None:
         raise ValidationError(f"decided_by must be 'human' or 'auto', got {decided_by!r}")
 
     if decided_by == "auto":
-        # A pure scope-eligibility call (trial_scope.auto_scope_decision):
-        # this project is solid-tumours-only regardless of molecule type,
-        # so a confidently heme_only asset is out of scope whether or not
-        # it's even an ADC. is_adc is therefore neither required nor
-        # asserted here — it stays entirely the reviewer's call, made
-        # whenever/if a human looks at this asset (e.g. via the held-out
-        # validation sample).
-        if gate != 2:
-            raise ValidationError("decided_by=auto is only valid for gate_reached=2")
-        if payload.get("in_scope") != "no":
-            raise ValidationError("decided_by=auto records must be in_scope=no")
-        scope_reason = payload.get("scope_reason")
-        if scope_reason not in SCOPE_OUT_REASONS:
+        # decided_by=auto is a source, not a specific rule — it covers both
+        # scripts/apply_auto_scope_exclusions.py's heme_only exclusions and
+        # pharma_stats.triage's five-rule Layer 1 (plus Layers 2/3's model
+        # and web-search is_adc verdicts). Every such record must say which
+        # layer decided it (see vocab.TRIAGE_LAYERS) so "how was this
+        # decided" is always answerable from the record alone.
+        triage_layer = payload.get("triage_layer")
+        if triage_layer not in TRIAGE_LAYERS:
             raise ValidationError(
-                f"decided_by=auto requires scope_reason from {SCOPE_OUT_REASONS}, got {scope_reason!r}"
+                f"decided_by=auto requires triage_layer from {TRIAGE_LAYERS}, got {triage_layer!r}"
             )
-        is_adc = payload.get("is_adc")
-        if is_adc is not None and is_adc not in IS_ADC_VALUES:
-            raise ValidationError(f"is_adc must be one of {IS_ADC_VALUES} or absent, got {is_adc!r}")
-        return
+
+        if gate == 1:
+            # An auto is_adc=no verdict (INN denylist hit, or a batched/
+            # web-search layer confidently ruling it out). is_adc=yes is
+            # never saved terminal at gate 1 — same rule as a human review
+            # (see below) — because it isn't informative on its own: the
+            # candidate still needs an in_scope verdict, which either
+            # combines into one gate-2 auto record (see below) or, if no
+            # scope rule fires either, isn't written at all and stays in
+            # the normal manual queue.
+            is_adc = payload.get("is_adc")
+            if is_adc != "no":
+                raise ValidationError(
+                    f"decided_by=auto, gate_reached=1 requires is_adc='no', got {is_adc!r} — "
+                    "an auto is_adc=yes verdict is never saved at gate 1 alone"
+                )
+            return
+
+        if gate == 2:
+            # A pure scope-eligibility call. is_adc is required here (unlike
+            # the old heme_only-only behaviour) so a triage-produced record
+            # always states both verdicts it combined — but "unknown"/None
+            # stays legal for scripts/apply_auto_scope_exclusions.py's
+            # heme_only path, which never asks the molecule-identity
+            # question at all (see trial_scope.auto_scope_decision).
+            if payload.get("in_scope") != "no":
+                raise ValidationError("decided_by=auto gate_reached=2 records must be in_scope=no")
+            scope_reason = payload.get("scope_reason")
+            if scope_reason not in SCOPE_OUT_REASONS:
+                raise ValidationError(
+                    f"decided_by=auto requires scope_reason from {SCOPE_OUT_REASONS}, got {scope_reason!r}"
+                )
+            is_adc = payload.get("is_adc")
+            if is_adc is not None and is_adc not in IS_ADC_VALUES:
+                raise ValidationError(f"is_adc must be one of {IS_ADC_VALUES} or absent, got {is_adc!r}")
+            return
+
+        raise ValidationError("decided_by=auto is only valid for gate_reached in (1, 2)")
 
     is_adc = payload.get("is_adc")
     if is_adc not in IS_ADC_VALUES:
@@ -119,6 +148,20 @@ def validate_label_payload(payload: dict) -> None:
             "this program's evidence was incomplete when served, which should be impossible"
         )
 
+    # Third-party (commercial database / industry tracker) sighting of the
+    # discontinuation — a DIFFERENT signal than public_confirmation_date
+    # (the sponsor's/a filing's own statement). Independent of status: it's
+    # evidence about what a tracker recorded, not the reviewer's own
+    # judgement, so it's validated as a pair (a date needs its source to be
+    # usable as evidence) rather than gated on status.
+    third_party_date = payload.get("third_party_first_noted_date")
+    third_party_source = payload.get("third_party_source")
+    if bool(third_party_date) != bool(third_party_source):
+        raise ValidationError(
+            "third_party_first_noted_date and third_party_source must be given together "
+            "(a date with no source, or a source with no date, isn't usable evidence)"
+        )
+
     status = payload.get("status")
     if status not in PROGRAM_STATUSES:
         raise ValidationError(f"status must be one of {PROGRAM_STATUSES}, got {status!r}")
@@ -142,6 +185,17 @@ def validate_label_payload(payload: dict) -> None:
             )
         if not payload.get("label_evidence_date"):
             raise ValidationError("dead_confirmed requires label_evidence_date")
+        # Only meaningful when a confirmation date actually exists — a
+        # never_publicly_confirmed record has no confirmation to type.
+        # pipeline_page_removal is a legitimate value here, not an error —
+        # see vocab.py: it's the ambiguous case, tagged rather than resolved.
+        if confirmation_date:
+            evidence_type = payload.get("confirmation_evidence_type")
+            if evidence_type not in CONFIRMATION_EVIDENCE_TYPES:
+                raise ValidationError(
+                    f"public_confirmation_date requires confirmation_evidence_type from "
+                    f"{CONFIRMATION_EVIDENCE_TYPES}, got {evidence_type!r}"
+                )
 
 
 def build_record(payload: dict, *, session_id: str, served_stratum: dict) -> dict:
@@ -160,6 +214,14 @@ def build_record(payload: dict, *, session_id: str, served_stratum: dict) -> dic
         "is_adc": payload.get("is_adc"),
         "in_scope": payload.get("in_scope"),
         "scope_reason": payload.get("scope_reason"),
+        # decided_by=auto provenance (see vocab.TRIAGE_LAYERS) — which
+        # layer decided this, and exactly which rule/model/prompt version,
+        # so "how was this decided" is always answerable from the record
+        # alone. None for a human decision.
+        "triage_layer": payload.get("triage_layer"),
+        "triage_rule": payload.get("triage_rule"),
+        "triage_model": payload.get("triage_model"),
+        "triage_prompt_version": payload.get("triage_prompt_version"),
         # discovery provenance, stamped server-side from the served candidate's
         # own data (never client-supplied) — see app.py's submit_label. The
         # "which pattern misfired" signal only means anything if it's the
@@ -174,7 +236,13 @@ def build_record(payload: dict, *, session_id: str, served_stratum: dict) -> dic
         "evidence_note": payload.get("evidence_note") or "",
         "label_evidence_date": payload.get("label_evidence_date"),
         "public_confirmation_date": payload.get("public_confirmation_date"),
+        "confirmation_evidence_type": payload.get("confirmation_evidence_type"),
         "never_publicly_confirmed": bool(payload.get("never_publicly_confirmed")),
+        # Commercial-database/tracker sighting — distinct from
+        # public_confirmation_date (sponsor/filing statement). Lets lead
+        # time be computed against either benchmark without conflating them.
+        "third_party_first_noted_date": payload.get("third_party_first_noted_date"),
+        "third_party_source": payload.get("third_party_source"),
         "blind": bool(payload.get("blind")),
         "is_repeat_probe": bool(payload.get("is_repeat_probe")),
         "stratum_band": served_stratum.get("band"),

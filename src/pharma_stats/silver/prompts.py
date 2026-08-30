@@ -1,7 +1,7 @@
-"""Prompt construction, response parsing, and k=5 self-consistency
-sampling for the two decomposed questions this first wiring can actually
-answer from CT.gov evidence alone. See evidence.py's module docstring for
-scope: Q1 (trial initiated since X) is deterministic
+"""Prompt construction, response parsing, and k=3-adaptive-to-5
+self-consistency sampling for the two decomposed questions this first
+wiring can actually answer from CT.gov evidence alone. See evidence.py's
+module docstring for scope: Q1 (trial initiated since X) is deterministic
 (evidence.trials_initiated_since — no model call, no need for one); Q4
 (successor asset) always abstains here (ask_successor_asset makes no API
 call at all — there is no citable evidence source for it yet).
@@ -21,7 +21,8 @@ from pharma_stats.silver.questions import (
     SuccessorAssetAnswer,
 )
 
-K = 5
+INITIAL_K = sampling.DEFAULT_INITIAL_K   # 3 — sample this many first
+ESCALATED_K = sampling.DEFAULT_ESCALATED_K  # 5 — only reached on disagreement at INITIAL_K
 TEMPERATURE = 1.0
 
 _EXTRACTION_SYSTEM = (
@@ -72,8 +73,9 @@ Respond with exactly this JSON shape:
 Use "not_determinable" if no trial has a clear, substantive stop reason stated."""
 
 
-def _sample_once(prompt: str, model: str) -> tuple[Optional[dict], str]:
-    raw = model_client.complete(prompt, system=_EXTRACTION_SYSTEM, temperature=TEMPERATURE, model=model)
+def _sample_once(prompt: str, model: str, usages: list) -> tuple[Optional[dict], str]:
+    raw, usage = model_client.complete(prompt, system=_EXTRACTION_SYSTEM, temperature=TEMPERATURE, model=model)
+    usages.append(usage)
     return model_client.extract_json(raw), raw
 
 
@@ -91,29 +93,42 @@ def _verify_citation(
     return (citation if passed else None), {"passed": passed, "reason": reason, "citation": vars(citation)}
 
 
+def _usage_log(usages: list) -> dict:
+    total_input = sum(u.input_tokens for u in usages)
+    total_output = sum(u.output_tokens for u in usages)
+    cost = sum(u.cost_usd() for u in usages)
+    return {"calls": len(usages), "input_tokens": total_input, "output_tokens": total_output, "cost_usd": cost}
+
+
 def ask_discontinuation_statement(
     program_name: str, evidence: dict, *, model: str = model_client.DEFAULT_MODEL,
 ) -> tuple[DiscontinuationStatementAnswer, dict]:
     prompt = _discontinuation_prompt(program_name, evidence_text(evidence))
     raw_responses: list[str] = []
     parsed: list[Optional[dict]] = []
+    usages: list = []
 
     def _one() -> str:
-        p, raw = _sample_once(prompt, model)
+        p, raw = _sample_once(prompt, model, usages)
         raw_responses.append(raw)
         parsed.append(p)
         return json.dumps(p.get("exists") if p else None)
 
-    votes = sampling.sample_answers(_one, k=K, temperature=TEMPERATURE)
+    votes = sampling.sample_answers_adaptive(
+        _one, initial_k=INITIAL_K, escalated_k=ESCALATED_K, temperature=TEMPERATURE,
+    )
+    actual_k = len(votes)
     disagreement = sampling.should_abstain(votes)
     majority_raw, majority_count = sampling.majority_vote(votes) if votes else (json.dumps(None), 0)
     majority_value = json.loads(majority_raw)
 
     log = {
         "question": "discontinuation_statement", "prompt": prompt, "system": _EXTRACTION_SYSTEM,
-        "model": model, "k": K, "temperature": TEMPERATURE,
+        "model": model, "k": actual_k, "initial_k": INITIAL_K, "escalated_k": ESCALATED_K,
+        "escalated": actual_k > INITIAL_K, "temperature": TEMPERATURE,
         "raw_responses": raw_responses, "parsed_samples": parsed,
         "votes": [json.loads(v) for v in votes], "disagreement": disagreement, "majority_count": majority_count,
+        "usage": _usage_log(usages),
     }
 
     if disagreement or majority_value in (None, NOT_DETERMINABLE, False):
@@ -139,23 +154,29 @@ def ask_stop_reason(
     prompt = _stop_reason_prompt(program_name, evidence_text(evidence))
     raw_responses: list[str] = []
     parsed: list[Optional[dict]] = []
+    usages: list = []
 
     def _one() -> str:
-        p, raw = _sample_once(prompt, model)
+        p, raw = _sample_once(prompt, model, usages)
         raw_responses.append(raw)
         parsed.append(p)
         return json.dumps(p.get("category") if p else None)
 
-    votes = sampling.sample_answers(_one, k=K, temperature=TEMPERATURE)
+    votes = sampling.sample_answers_adaptive(
+        _one, initial_k=INITIAL_K, escalated_k=ESCALATED_K, temperature=TEMPERATURE,
+    )
+    actual_k = len(votes)
     disagreement = sampling.should_abstain(votes)
     majority_raw, majority_count = sampling.majority_vote(votes) if votes else (json.dumps(None), 0)
     majority_value = json.loads(majority_raw)
 
     log = {
         "question": "stop_reason", "prompt": prompt, "system": _EXTRACTION_SYSTEM,
-        "model": model, "k": K, "temperature": TEMPERATURE,
+        "model": model, "k": actual_k, "initial_k": INITIAL_K, "escalated_k": ESCALATED_K,
+        "escalated": actual_k > INITIAL_K, "temperature": TEMPERATURE,
         "raw_responses": raw_responses, "parsed_samples": parsed,
         "votes": [json.loads(v) for v in votes], "disagreement": disagreement, "majority_count": majority_count,
+        "usage": _usage_log(usages),
     }
 
     if disagreement or majority_value in (None, NOT_DETERMINABLE):
@@ -179,7 +200,7 @@ def ask_successor_asset(program_name: str, evidence: dict) -> tuple[SuccessorAss
     evidence-gathering, which it isn't). No model call is made."""
     log = {
         "question": "successor_asset", "prompt": None, "model": None,
-        "raw_responses": [], "parsed_samples": [],
+        "raw_responses": [], "parsed_samples": [], "usage": _usage_log([]),
         "note": "no citable evidence source wired in yet — hard-coded not_determinable, no API call made",
     }
     return SuccessorAssetAnswer(exists=NOT_DETERMINABLE), log

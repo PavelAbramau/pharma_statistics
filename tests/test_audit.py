@@ -513,6 +513,46 @@ def test_mesh_coverage_gate_handles_unmaterialized(monkeypatch):
     assert "not materialized" in checks[0].actual
 
 
+def test_silence_score_dead_zone_check_warns_on_spike(monkeypatch):
+    # 17/20 = 85% share exactly one value — the dead-zone shape
+    programs = [{"silence_score": 0} for _ in range(17)] + [
+        {"silence_score": 30}, {"silence_score": 55}, {"silence_score": 80},
+    ]
+    monkeypatch.setattr(pp, "load_materialized", lambda: programs)
+    checks = universe._silence_score_dead_zone_check()
+    check = checks[0]
+    assert check.level == "WARN"
+    assert "score=0" in check.actual
+    assert "17/20" in check.actual
+
+
+def test_silence_score_dead_zone_check_passes_when_spread(monkeypatch):
+    programs = [{"silence_score": s} for s in [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]]
+    monkeypatch.setattr(pp, "load_materialized", lambda: programs)
+    checks = universe._silence_score_dead_zone_check()
+    assert checks[0].level == "PASS"
+
+
+def test_silence_score_dead_zone_check_ignores_unscored_programs(monkeypatch):
+    # None (no resolvable trials) must never count toward the denominator
+    # or be mistaken for a spike value itself — a pile of 10 Nones plus one
+    # spread-out scored population must read as "spread out", not "spike"
+    programs = [{"silence_score": None} for _ in range(10)] + [
+        {"silence_score": s} for s in [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
+    ]
+    monkeypatch.setattr(pp, "load_materialized", lambda: programs)
+    checks = universe._silence_score_dead_zone_check()
+    check = checks[0]
+    assert check.level == "PASS"
+    assert "/10 " in check.actual
+
+
+def test_silence_score_dead_zone_check_handles_unmaterialized(monkeypatch):
+    monkeypatch.setattr(pp, "load_materialized", lambda: [])
+    checks = universe._silence_score_dead_zone_check()
+    assert checks[0].level == "INFO"
+
+
 def test_current_state_read_boundary_fails_on_unwhitelisted_call(monkeypatch, tmp_path):
     bad_module = tmp_path / "bad_module.py"
     bad_module.write_text(

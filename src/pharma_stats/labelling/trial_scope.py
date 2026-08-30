@@ -20,13 +20,14 @@ only after checking validation_agreement() clears AGREEMENT_THRESHOLD.
 """
 from __future__ import annotations
 
+import html
 import json
 import random
 import re
 from pathlib import Path
 from typing import Optional
 
-from pharma_stats.config import DATA_DIR
+from pharma_stats.config import DATA_DIR, REPO_ROOT
 from pharma_stats.discovery.mesh_categories import (
     AMBIGUOUS_OVERRIDE_PHRASES, HEME_TEXT_HINT_KEYWORDS, category_for,
 )
@@ -49,6 +50,17 @@ MESH_COVERAGE_THRESHOLD = 0.90
 # validation_agreement). Not gold data — a small, rebuildable index, same
 # spirit as data/labelling_session.json.
 VALIDATION_SAMPLE_PATH = DATA_DIR / "auto_scope_validation_sample.json"
+
+# Hand-adjudicated corrections to CT.gov's sponsor-selected leadSponsor.class
+# field, keyed by exact sponsor name. That field is self-reported and gets
+# miscoded in both directions (e.g. "Shanghai Institute Of Biological
+# Products" — a state-owned commercial biologics manufacturer under
+# Sinopharm/CNBG — is classed OTHER despite the academic-sounding name).
+# Reviewable, hand-authored, at repo root (like gold/) — never guessed or
+# auto-populated; see scripts/report_sponsor_class_candidates.py, which
+# only ever proposes candidates for a human to adjudicate here. Takes
+# precedence over the raw field everywhere via apply_sponsor_class_overrides.
+SPONSOR_CLASS_OVERRIDES_PATH = REPO_ROOT / "sponsor_class_overrides.json"
 
 
 def load_validation_sample(path: Optional[Path] = None) -> list[dict]:
@@ -142,11 +154,94 @@ def is_non_oncology_asset(trial_classifications: list[str]) -> bool:
     return bool(trial_classifications) and all(c == "non_oncology" for c in trial_classifications)
 
 
+def load_sponsor_class_overrides(path: Optional[Path] = None) -> dict:
+    path = path or SPONSOR_CLASS_OVERRIDES_PATH  # resolved at call time, not import time, so it stays testable
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def apply_sponsor_class_overrides(
+    sponsors_over_time: list[dict], overrides: Optional[dict] = None,
+) -> list[dict]:
+    """Enrich each sponsor entry with effective_class (the override's class
+    if one is on file for this exact sponsor name, else CT.gov's raw
+    class) and class_overridden (whether one was applied) — without ever
+    mutating the raw "class" field, so the original CT.gov value stays on
+    record. Every consumer of sponsor class (is_non_industry_sponsor, the
+    review screen) must read effective_class, never class directly.
+
+    Matched on the HTML-unescaped name: the same sponsor's name shows up
+    both escaped and not (e.g. "Beijing Children&#x27;s Hospital" vs
+    "Beijing Children's Hospital") across different raw CT.gov snapshots
+    of the same trial — a real inconsistency in the registry's own data,
+    not something this project introduces. Matching on the raw string
+    would silently miss the override for whichever variant a human didn't
+    happen to type in sponsor_class_overrides.json."""
+    overrides = load_sponsor_class_overrides() if overrides is None else overrides
+    overrides_by_unescaped_name = {html.unescape(name): payload for name, payload in overrides.items()}
+    enriched = []
+    for s in sponsors_over_time or []:
+        s = dict(s)
+        override = overrides_by_unescaped_name.get(html.unescape(s.get("sponsor") or ""))
+        raw_class = (s.get("class") or "").upper() or None
+        s["effective_class"] = override["override_class"].upper() if override else raw_class
+        s["class_overridden"] = bool(override)
+        enriched.append(s)
+    return enriched
+
+
 def is_non_industry_sponsor(sponsors_over_time: list[dict]) -> bool:
-    """Flag only — CLAUDE.md's owner-is-a-dated-interval model means an
-    asset can have had more than one sponsor class over time; any
-    non-INDUSTRY sponsor on file is enough to surface it for review."""
-    return any((s.get("class") or "").upper() != "INDUSTRY" for s in (sponsors_over_time or []))
+    """Flag only, for the review screen's pre-fill hint — CLAUDE.md's
+    owner-is-a-dated-interval model means an asset can have had more than
+    one sponsor class over time; any non-INDUSTRY sponsor on file is
+    enough to surface it for a human to look at. Reads effective_class
+    when present (post sponsor_class_overrides.json correction), falling
+    back to the raw CT.gov class otherwise.
+
+    Deliberately loose ("any") — never use this for an automatic
+    in_scope=no decision. A real industry ADC with an investigator-
+    initiated side-trial led by a hospital would have exactly one
+    non-industry sponsor on file and still be wrongly rejected; see
+    pharma_stats.triage.deterministic, which uses
+    is_all_sponsors_non_industry instead."""
+    return any(
+        (s.get("effective_class") or s.get("class") or "").upper() != "INDUSTRY"
+        for s in (sponsors_over_time or [])
+    )
+
+
+def is_all_sponsors_industry(sponsors_over_time: list[dict]) -> bool:
+    """The positive mirror of is_all_sponsors_non_industry — every sponsor
+    this asset has ever had is confidently INDUSTRY. Used for a positive
+    in_scope=yes rule (pharma_stats.triage.deterministic), not just a
+    "no rejection fired" default. False with no sponsors on file — no
+    evidence is not evidence of eligibility either."""
+    sponsors = sponsors_over_time or []
+    if not sponsors:
+        return False
+    return all(
+        (s.get("effective_class") or s.get("class") or "").upper() == "INDUSTRY"
+        for s in sponsors
+    )
+
+
+def is_all_sponsors_non_industry(sponsors_over_time: list[dict]) -> bool:
+    """Auto-decision strength — every sponsor this asset has ever had is
+    non-INDUSTRY, not just some. Conservative on purpose: an asset with a
+    real industry sponsor plus an academic collaborator on a side-trial
+    must not be auto-rejected here (is_non_industry_sponsor's "any"
+    semantics would wrongly catch it — confirmed against real data: 24
+    INN-suffix-verified ADCs would be misclassified non_industry under
+    "any" but not under "all"). False (never reject) when there are no
+    sponsors on file at all — no evidence is not evidence of exclusion."""
+    sponsors = sponsors_over_time or []
+    if not sponsors:
+        return False
+    return all(
+        (s.get("effective_class") or s.get("class") or "").upper() != "INDUSTRY"
+        for s in sponsors
+    )
 
 
 def mesh_coverage(programs: list[dict]) -> dict:

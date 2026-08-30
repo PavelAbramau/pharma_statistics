@@ -28,6 +28,10 @@
 
   h1.name { margin: 0 0 2px; font-size: 22px; }
   .sub { color: var(--muted); margin-bottom: 14px; }
+  .sponsor-line { font-size: 14px; margin: 2px 0 10px; }
+  .sponsor-line .cls { font-family: var(--mono); font-weight: 700; }
+  .sponsor-line.flagged { color: var(--warn); }
+  .sponsor-line.flagged .cls { color: var(--warn); }
   .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); margin-right: 6px; }
   .badge.provisional { color: var(--warn); border-color: var(--warn); }
   .badge.event-type { color: var(--accent); border-color: var(--accent); }
@@ -161,6 +165,23 @@
         <label class="inline" style="margin-top:6px">
           <input type="checkbox" id="neverConfirmed"> never publicly confirmed
         </label>
+        <div id="confirmationEvidenceField" style="margin-top:10px">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:6px">Confirmation evidence type (required if public confirmation date given)</div>
+          <div class="choicegrid" id="confirmationEvidenceChoices"></div>
+        </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:6px">Third-party tracker sighting (optional — e.g. Citeline, AdisInsight)</div>
+          <div class="datepair">
+            <div>
+              <div style="font-size:11px;color:var(--muted)">First noted date</div>
+              <input type="date" id="thirdPartyFirstNotedDate">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted)">Source</div>
+              <input type="text" id="thirdPartySource" placeholder="e.g. Citeline Pharmaprojects">
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

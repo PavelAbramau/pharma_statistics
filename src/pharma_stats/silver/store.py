@@ -30,9 +30,31 @@ from pharma_stats.config import SILVER_DIR
 SILVER_LABELS_PATH = SILVER_DIR / "labels.jsonl"
 
 
+def _sum_usage(payload: dict) -> dict:
+    """Total real cost/tokens across every API call this record made —
+    Q2/Q3's k samples (see silver/prompts.py's per-question usage log) plus
+    the Red Team pass, if it ran. Q1/Q4 never call the API (usage is
+    zeroed there already) so they contribute nothing."""
+    calls = input_tokens = output_tokens = 0
+    cost = 0.0
+    for log in (payload.get("answers") or {}).values():
+        u = log.get("usage") or {}
+        calls += u.get("calls", 0)
+        input_tokens += u.get("input_tokens", 0)
+        output_tokens += u.get("output_tokens", 0)
+        cost += u.get("cost_usd", 0.0)
+    rt = (payload.get("red_team_objection") or {}).get("usage") or {}
+    calls += rt.get("calls", 0)
+    input_tokens += rt.get("input_tokens", 0)
+    output_tokens += rt.get("output_tokens", 0)
+    cost += rt.get("cost_usd", 0.0)
+    return {"calls": calls, "input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": cost}
+
+
 def build_record(payload: dict, *, session_id: str) -> dict:
     """Stamp a silver payload into a durable record. labeller is always
     "auto" — there is no parameter to make it anything else."""
+    usage = _sum_usage(payload)
     return {
         "event_id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -58,6 +80,12 @@ def build_record(payload: dict, *, session_id: str) -> dict:
         "self_consistency": payload.get("self_consistency"),
         # Red Team objection agent's verdict against this label, if run
         "red_team_objection": payload.get("red_team_objection"),
+        # real per-call cost, summed across every API call this record
+        # made (Q2/Q3 samples + Red Team, if it ran) — see _sum_usage.
+        # Top-level cost_usd/calls/input_tokens/output_tokens so a bulk
+        # cost report never has to re-walk the nested answers dict.
+        "calls": usage["calls"], "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"], "cost_usd": usage["cost_usd"],
     }
 
 
