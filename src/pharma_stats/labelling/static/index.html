@@ -30,6 +30,13 @@
   .sub { color: var(--muted); margin-bottom: 14px; }
   .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); margin-right: 6px; }
   .badge.provisional { color: var(--warn); border-color: var(--warn); }
+  .badge.event-type { color: var(--accent); border-color: var(--accent); }
+  .badge.event-direction-decreased, .badge.event-direction-pulled_earlier { color: var(--bad); border-color: var(--bad); }
+  .badge.event-direction-increased, .badge.event-direction-pushed_later { color: var(--warn); border-color: var(--warn); }
+  .badge.event-direction-finalized { color: var(--good); border-color: var(--good); }
+  .badge.coverage-full { color: var(--good); border-color: var(--good); }
+  .badge.coverage-partial { color: var(--warn); border-color: var(--warn); }
+  .badge.coverage-none { color: var(--bad); border-color: var(--bad); }
 
   section.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
   section.card h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
@@ -93,7 +100,8 @@
 <body>
 
 <div id="topbar">
-  <span><b id="labelledCount">–</b> / <span id="totalCount">–</span> labelled</span>
+  <span><b id="labelledCount">–</b> / <span id="totalCount">–</span> labelled (gate 3)</span>
+  <span title="triage rejections — never count toward the label target">gate1 <b id="gate1Count">–</b> / gate2 <b id="gate2Count">–</b> rejected</span>
   <span><b id="queueCount">–</b> in fresh queue</span>
   <span>median <b id="medianSec">–</b>s/label</span>
   <span id="timer">0.0s</span>
@@ -101,50 +109,70 @@
   <label id="blindToggle" class="on"><input type="checkbox" id="blindCheckbox" checked> Blind mode (Alt+B)</label>
   <span id="helpBtn">? shortcuts</span>
 </div>
+<div id="topbar2" style="display:flex; gap:18px; padding:4px 16px 8px; background:var(--panel); border-bottom:1px solid var(--border); font-size:11.5px; color:var(--muted); flex-wrap:wrap">
+  <span>gate-1 rejections by matched pattern: <span id="gate1PatternBreakdown">–</span></span>
+</div>
 
 <div id="layout">
   <div id="left">
     <div id="programView"></div>
   </div>
   <div id="right">
-    <div class="field">
-      <label>Program status</label>
-      <div class="choicegrid" id="statusChoices"></div>
+    <div class="field" id="gate1">
+      <label>Gate 1 — is this an ADC? (molecule judgement, nothing else)</label>
+      <div class="choicegrid" id="isAdcChoices"></div>
     </div>
-    <div class="field" id="killReasonField" style="display:none">
-      <label>Kill reason</label>
-      <div class="choicegrid" id="killChoices"></div>
-    </div>
-    <div class="field">
-      <label>Confidence</label>
-      <div class="choicegrid" id="confidenceChoices"></div>
-    </div>
-    <div class="field" id="deadDatesField" style="display:none">
-      <label>Dates (required for dead_confirmed)</label>
-      <div class="datepair">
-        <div>
-          <div style="font-size:11px;color:var(--muted)">Label evidence date</div>
-          <input type="date" id="labelEvidenceDate">
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--muted)">Public confirmation date</div>
-          <input type="date" id="publicConfirmationDate">
-        </div>
+
+    <div class="field" id="gate2" style="display:none">
+      <label>Gate 2 — in scope? (ADCs / solid tumours / industry / 2012–present)</label>
+      <div id="trialScopeCheck" style="font-size:12px; margin-bottom:8px"></div>
+      <div class="choicegrid" id="inScopeChoices"></div>
+      <div id="scopeReasonField" style="display:none; margin-top:10px">
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:6px">Reason out of scope</div>
+        <div class="choicegrid" id="scopeReasonChoices"></div>
       </div>
-      <label class="inline" style="margin-top:6px">
-        <input type="checkbox" id="neverConfirmed"> never publicly confirmed
-      </label>
     </div>
+
+    <div id="gate3" style="display:none">
+      <div class="field">
+        <label>Gate 3 — program status</label>
+        <div class="choicegrid" id="statusChoices"></div>
+      </div>
+      <div class="field" id="killReasonField" style="display:none">
+        <label>Kill reason</label>
+        <div class="choicegrid" id="killChoices"></div>
+      </div>
+      <div class="field">
+        <label>Confidence</label>
+        <div class="choicegrid" id="confidenceChoices"></div>
+      </div>
+      <div class="field" id="deadDatesField" style="display:none">
+        <label>Dates (required for dead_confirmed)</label>
+        <div class="datepair">
+          <div>
+            <div style="font-size:11px;color:var(--muted)">Label evidence date</div>
+            <input type="date" id="labelEvidenceDate">
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--muted)">Public confirmation date</div>
+            <input type="date" id="publicConfirmationDate">
+          </div>
+        </div>
+        <label class="inline" style="margin-top:6px">
+          <input type="checkbox" id="neverConfirmed"> never publicly confirmed
+        </label>
+      </div>
+    </div>
+
     <div class="field">
-      <label>Evidence note</label>
+      <label>Note</label>
       <textarea id="evidenceNote" placeholder="Why. Cite what you saw."></textarea>
     </div>
     <div id="err"></div>
     <div class="actions">
       <button class="secondary" id="skipBtn">Skip (N)</button>
-      <button class="secondary danger" id="invalidBtn">Not an ADC (X)</button>
     </div>
-    <div class="actions">
+    <div class="actions" id="gate3Actions" style="display:none">
       <button class="primary" id="saveBtn">Save &amp; next (Enter)</button>
     </div>
   </div>
@@ -165,12 +193,18 @@
   <div class="box">
     <h3>Keyboard shortcuts</h3>
     <table>
+      <tr><td colspan="2" style="color:var(--muted); padding-top:8px">Gate 1 (is it an ADC?)</td></tr>
+      <tr><td><kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd></td><td>yes / no / unsure — no/unsure saves &amp; advances immediately</td></tr>
+      <tr><td colspan="2" style="color:var(--muted); padding-top:8px">Gate 2 (in scope?) — only after Gate 1 = yes</td></tr>
+      <tr><td><kbd>1</kbd>/<kbd>2</kbd></td><td>in scope yes / no</td></tr>
+      <tr><td><kbd>a</kbd>–<kbd>d</kbd></td><td>scope-out reason (after choosing "no") — saves &amp; advances</td></tr>
+      <tr><td colspan="2" style="color:var(--muted); padding-top:8px">Gate 3 (full label) — only after Gate 2 = yes</td></tr>
       <tr><td><kbd>1</kbd>–<kbd>6</kbd></td><td>set status</td></tr>
       <tr><td><kbd>a</kbd>–<kbd>h</kbd></td><td>set kill reason (when status = dead_confirmed)</td></tr>
       <tr><td><kbd>Shift</kbd>+<kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd></td><td>confidence high/medium/low</td></tr>
       <tr><td><kbd>Enter</kbd></td><td>save &amp; advance</td></tr>
+      <tr><td colspan="2" style="color:var(--muted); padding-top:8px">Any gate</td></tr>
       <tr><td><kbd>N</kbd></td><td>skip, come back later</td></tr>
-      <tr><td><kbd>X</kbd></td><td>flag: not a valid ADC candidate</td></tr>
       <tr><td><kbd>Alt</kbd>+<kbd>B</kbd></td><td>toggle blind mode</td></tr>
       <tr><td><kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd></td><td>save while typing in the note field</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>close this / close reveal</td></tr>

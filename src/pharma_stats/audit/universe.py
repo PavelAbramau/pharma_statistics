@@ -4,15 +4,26 @@ saturation curve (is discovery actually done, or would a 4th strategy
 still find a lot?)."""
 from __future__ import annotations
 
+import re
+
 import duckdb
 
 from pharma_stats.audit.types import Check, fail, info, ok, warn
 from pharma_stats.config import REPO_ROOT, WAREHOUSE_DB
-from pharma_stats.discovery.candidates import load_seed_assets
+from pharma_stats.discovery.candidates import genuine_combo_trial_ids, load_seed_assets
+from pharma_stats.labelling import provisional_programs as pp
+from pharma_stats.labelling import store
+from pharma_stats.labelling import trial_scope as ts
 
 STAGE = "universe"
 KNOWN_ADCS_PATH = REPO_ROOT / "tests" / "fixtures" / "known_adcs.txt"
 STRATEGY_ORDER = ["pattern_match", "seed_expansion", "sponsor_expansion"]
+
+
+def _word_boundary_contains(haystack: str, needle: str) -> bool:
+    if not needle:
+        return False
+    return re.search(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", haystack) is not None
 
 
 def run() -> list[Check]:
@@ -26,6 +37,8 @@ def run() -> list[Check]:
     checks += _recall_probe(candidates)
     checks += _clustering_and_backlog(candidates)
     checks += _saturation_curve(candidates)
+    checks += _heme_solid_span_report()
+    checks += _heme_only_auto_exclusion_agreement()
     return checks
 
 
@@ -58,15 +71,26 @@ def _recall_probe(candidates: list[dict]) -> list[Check]:
             actual="fixture missing or empty", detail="",
         )]
 
-    candidate_name_sets = [
-        {c["proposed_name"].lower()} | {s.lower() for s in (c["synonyms"] or [])}
-        for c in candidates
+    candidate_names = [
+        n.lower() for c in candidates
+        for n in [c["proposed_name"], *(c["synonyms"] or [])]
     ]
 
     missing = []
     for names in known:
-        norm = {n.lower() for n in names}
-        if not any(norm & cand_names for cand_names in candidate_name_sets):
+        norm = [n.lower() for n in names]
+        # exact match OR word-boundary substring either direction — a
+        # candidate's proposed_name is often the raw CT.gov intervention
+        # string plus a parenthetical ("Enapotamab vedotin (HuMax-AXL-
+        # ADC)"), so an exact-set match alone produces false "missing"
+        # verdicts for assets discovery actually found. Diagnosed
+        # 2026-08-26: 2 of 26 originally-"missing" assets were exactly
+        # this — already correctly discovered, just under a longer name.
+        found = any(
+            n == cn or _word_boundary_contains(cn, n) or _word_boundary_contains(n, cn)
+            for n in norm for cn in candidate_names
+        )
+        if not found:
             missing.append(names[0])
 
     checks = [(warn if missing else ok)(
@@ -111,7 +135,6 @@ def _independence_check(known: list[list[str]]) -> Check:
 
 
 def _clustering_and_backlog(candidates: list[dict]) -> list[Check]:
-    by_id = {c["candidate_id"]: c for c in candidates}
     zero_trial = [c["candidate_id"] for c in candidates if not c["nct_ids"]]
 
     nct_to_candidates: dict[str, set[str]] = {}
@@ -120,20 +143,12 @@ def _clustering_and_backlog(candidates: list[dict]) -> list[Check]:
             nct_to_candidates.setdefault(nct_id, set()).add(c["candidate_id"])
     overlaps = {nct: cs for nct, cs in nct_to_candidates.items() if len(cs) > 1}
 
-    def is_verified(cid: str) -> bool:
-        """A pattern/seed hit only counts as verified if it wasn't merely
-        a weak literal-term match (e.g. a generic "TROP2 ADC" arm-slot
-        label matches the literal "adc" term and gets tagged
-        pattern_match, but candidates.py itself flags that as ambiguous —
-        respect that flag here rather than trusting the strategy tag
-        alone, or a generic label reads as "verified"."""
-        c = by_id[cid]
-        return bool(set(c["strategies"] or []) & {"pattern_match", "seed_expansion"}) and not c["ambiguous"]
-
-    genuine_combo = {  # every claimant independently pattern/seed-verified — likely a real shared trial
-        nct: cs for nct, cs in overlaps.items() if all(is_verified(c) for c in cs)
-    }
-    likely_noise = {nct: cs for nct, cs in overlaps.items() if nct not in genuine_combo}
+    # shared source of truth with the labelling app's provisional program
+    # builder (pharma_stats.labelling.provisional_programs) — both need
+    # the same answer to "is this shared trial real or noise"
+    genuine_combo_ids = genuine_combo_trial_ids(candidates)
+    genuine_combo = {nct: cs for nct, cs in overlaps.items() if nct in genuine_combo_ids}
+    likely_noise = {nct: cs for nct, cs in overlaps.items() if nct not in genuine_combo_ids}
 
     unreviewed = [c["candidate_id"] for c in candidates if c["review_status"] == "unreviewed"]
 
@@ -162,6 +177,65 @@ def _clustering_and_backlog(candidates: list[dict]) -> list[Check]:
             actual=f"{len(unreviewed)} / {len(candidates)}", detail="",
         ),
     ]
+
+
+def _heme_solid_span_report() -> list[Check]:
+    """Assets whose trials MeSH-classify as both heme and solid — the ones
+    a naive whole-asset keyword filter (or a careless whole-asset in_scope
+    call) would wrongly kill on their heme trials alone. See
+    labelling/trial_scope.py / discovery/mesh_categories.py."""
+    programs = pp.load_materialized()
+    if not programs:
+        return [info(
+            STAGE, "assets spanning both heme and solid-tumour trials (MeSH-classified)",
+            expected="provisional_programs materialized", actual="not materialized yet",
+            detail="run the labelling app once, or pharma_stats.labelling.provisional_programs.materialize()",
+        )]
+    spanning = [p for p in programs if p.get("spans_heme_and_solid")]
+    return [info(
+        STAGE, "assets spanning both heme and solid-tumour trials (MeSH-classified)",
+        expected="n/a — informational: a naive whole-asset filter would have wrongly excluded "
+                 "every one of these on their heme trials alone",
+        actual=f"{len(spanning)} / {len(programs)} assets",
+        detail=", ".join(p["proposed_name"] for p in spanning[:15]),
+    )]
+
+
+def _heme_only_auto_exclusion_agreement() -> list[Check]:
+    """The kill-switch: agreement between the classifier's heme_only
+    prediction and the reviewer's own blind decision on the held-out
+    validation sample (scripts/apply_auto_scope_exclusions.py). Below
+    trial_scope.AGREEMENT_THRESHOLD, that script refuses to write further
+    auto-exclusions — this check is what would tell you that's happening."""
+    sample = ts.load_validation_sample()
+    name = "heme_only auto-exclusion: blind validation agreement"
+    if not sample:
+        return [info(
+            STAGE, name,
+            expected=f">={ts.AGREEMENT_THRESHOLD:.0%} agreement before auto-exclusion is trusted",
+            actual="no validation sample yet",
+            detail="run scripts/apply_auto_scope_exclusions.py to draw one",
+        )]
+
+    records = store.load_records()
+    result = ts.validation_agreement(sample, records)
+    if result["agreement_rate"] is None:
+        return [info(
+            STAGE, name,
+            expected=f">={ts.AGREEMENT_THRESHOLD:.0%} agreement before auto-exclusion is trusted",
+            actual=f"0 / {len(sample)} of the held-out sample reviewed yet", detail="",
+        )]
+
+    level = ok if result["agreement_rate"] >= ts.AGREEMENT_THRESHOLD else fail
+    return [level(
+        STAGE, name,
+        expected=f">={ts.AGREEMENT_THRESHOLD:.0%} agreement between the classifier's heme_only "
+                 "prediction and the reviewer's own (blind) scope call",
+        actual=f"{result['agreements']} / {result['compared']} ({result['agreement_rate']:.0%}) "
+               f"of {len(sample)} held out",
+        detail="below threshold: scripts/apply_auto_scope_exclusions.py refuses to write further "
+               "auto-exclusions until this recovers",
+    )]
 
 
 def _saturation_curve(candidates: list[dict]) -> list[Check]:

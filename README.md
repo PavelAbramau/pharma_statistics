@@ -81,6 +81,21 @@ Labels are append-only JSONL at `gold/labels.jsonl`. Session/queue state
 self-consistency) persists to `data/labelling_session.json` and survives
 restarts; losing that file costs queue position, never a label.
 
+**History-coverage guard.** Every provisional program carries a
+`history_coverage` field (`full`/`partial`/`none`), computed from
+`history_index` + `backfill_queue` — not the timeline itself, since a
+program with zero indexed history and a program that was genuinely never
+amended render the exact same empty timeline. `/api/next` refuses to
+serve anything short of `full` (requeueing it for a later backfill pass,
+never dropping it); `validate_label_payload` refuses to save a label
+whose serve-time coverage wasn't `full` as a second, independent check;
+and `history_coverage_at_serve_time` is stamped onto every label record
+so incomplete-evidence labels can always be found retrospectively. The
+coverage badge is shown on screen unconditionally, never gated by blind
+mode — it's a data-quality fact, not a model opinion. The audit's
+`gold_set` stage re-verifies the invariant against the append-only record
+independently of both of the above.
+
 ## Differ (EvidenceEvent extraction)
 
 ```bash

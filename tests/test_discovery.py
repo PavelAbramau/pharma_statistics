@@ -25,11 +25,34 @@ def test_suffix_match_beats_literal():
     assert matches_pattern("paclitaxel") is None
 
 
+def test_suffix_terms_cover_newer_tecan_and_dotin_payloads():
+    """Regression, 2026-08-26: an independent known-ADC recall audit found
+    4 real ADCs entirely missing from SUFFIX_TERMS (trastuzumab rezetecan,
+    upifitamab rilsodotin, rinatabart sesutecan, trastuzumab pamirtecan) —
+    pattern_match could never have found them regardless of search
+    coverage, since it doesn't know these are ADC-naming suffixes at all."""
+    assert matches_pattern("trastuzumab rezetecan") == ("suffix", "rezetecan")
+    assert matches_pattern("upifitamab rilsodotin") == ("suffix", "rilsodotin")
+    assert matches_pattern("rinatabart sesutecan") == ("suffix", "sesutecan")
+    assert matches_pattern("trastuzumab pamirtecan") == ("suffix", "pamirtecan")
+
+
 def test_dev_code_heuristic():
     assert looks_like_dev_code("ABBV-011")
     assert looks_like_dev_code("SKB264")
     assert not looks_like_dev_code("trastuzumab deruxtecan")
     assert not looks_like_dev_code("pembrolizumab")
+
+
+def test_dev_code_heuristic_tolerates_trailing_formulation_qualifier():
+    """Regression, 2026-08-26: "SKB410 for injection" was rejected by the
+    bare regex, which meant strategy 3 never accepted the mention at all
+    — a real recall gap the audit's known-ADC probe caught."""
+    assert looks_like_dev_code("SKB410 for injection")
+    assert looks_like_dev_code("ABBV-011 for injection")
+    assert looks_like_dev_code("ABBV-011 for Injection")  # case-insensitive
+    assert looks_like_dev_code("ABBV-011 for infusion")
+    assert not looks_like_dev_code("pembrolizumab for injection")  # still not a dev code shape
 
 
 def test_denylist_is_case_insensitive():
@@ -252,6 +275,27 @@ def test_two_adc_combination_arm_does_not_merge_the_two_assets():
     # the combo trial must not have silently disappeared into either single-asset cluster
     assert "NCT00000062" not in deruxtecan_c.nct_ids
     assert "NCT00000062" not in govitecan_c.nct_ids
+
+
+def test_genuine_combo_trial_ids_requires_all_claimants_verified():
+    from pharma_stats.discovery.candidates import genuine_combo_trial_ids
+
+    candidates = [
+        {"candidate_id": "a", "proposed_name": "DrugA", "nct_ids": ["NCT1"],
+         "strategies": ["pattern_match"], "ambiguous": False},
+        {"candidate_id": "b", "proposed_name": "DrugB", "nct_ids": ["NCT1"],
+         "strategies": ["seed_expansion"], "ambiguous": False},
+        {"candidate_id": "c", "proposed_name": "DrugC", "nct_ids": ["NCT2"],
+         "strategies": ["pattern_match"], "ambiguous": False},
+        {"candidate_id": "d", "proposed_name": "DrugD", "nct_ids": ["NCT2"],
+         "strategies": ["sponsor_expansion"], "ambiguous": False},  # unverified claimant
+        {"candidate_id": "e", "proposed_name": "DrugE", "nct_ids": ["NCT3"],
+         "strategies": ["pattern_match"], "ambiguous": True},  # ambiguous, doesn't count
+        {"candidate_id": "f", "proposed_name": "DrugF", "nct_ids": ["NCT3"],
+         "strategies": ["pattern_match"], "ambiguous": False},
+    ]
+    result = genuine_combo_trial_ids(candidates)
+    assert result == {"NCT1"}  # only the all-verified, all-unambiguous overlap
 
 
 def test_pattern_match_iterator_emits_suffix_hits_and_skips_pre_2012():

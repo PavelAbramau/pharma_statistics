@@ -37,6 +37,10 @@ import duckdb
 
 from pharma_stats import snapshot as snap
 from pharma_stats.config import WAREHOUSE_DB
+from pharma_stats.history.index import RECOMMENDED_SIGNAL_LABELS
+from pharma_stats.labelling import trial_scope as ts
+
+HISTORY_COVERAGE_LEVELS = ["full", "partial", "none"]  # in order of trust, most to least
 
 SCORE_BANDS = [(0, 20), (20, 40), (40, 60), (60, 80), (80, 101)]
 
@@ -74,6 +78,9 @@ CREATE TABLE IF NOT EXISTS provisional_programs (
     sponsors_over_time     JSON,
     trial_count            INTEGER,
     nct_ids                 VARCHAR[],
+    excluded_shared_trials   JSON,
+    history_coverage          VARCHAR,
+    trial_coverage             JSON,
     silence_score            INTEGER,
     score_breakdown           JSON,
     band                       INTEGER,
@@ -84,7 +91,15 @@ CREATE TABLE IF NOT EXISTS provisional_programs (
     trials                          JSON,
     timeline                         JSON,
     review_status                     VARCHAR,
-    built_at                           TIMESTAMP
+    discovery_strategy                 VARCHAR,
+    match_strength                      VARCHAR,
+    matched_term                         VARCHAR,
+    trial_scope                           JSON,
+    scope_category                         VARCHAR,
+    spans_heme_and_solid                    BOOLEAN,
+    non_oncology_hint                        BOOLEAN,
+    non_industry_sponsor_hint                 BOOLEAN,
+    built_at                                   TIMESTAMP
 )
 """
 
@@ -197,6 +212,23 @@ def _best_trial_snapshot(
     if s is not None:
         return _study_from_body(s.body_json()), "latest"
     return None
+
+
+def _condition_browse_data(nct_id: str) -> tuple[list[dict], list[dict]]:
+    """(meshes, ancestors) from CT.gov's conditionBrowseModule. This lives
+    under derivedSection on a "current state" fetch (``snap.latest("ctgov",
+    nct_id)``) ONLY — versioned-history diff bodies (the ones
+    _best_trial_snapshot prefers for amendment tracking) never carry
+    derivedSection at all, so this is deliberately independent of that
+    lookup. Most trials in this project have never had a current-state
+    fetch, so ([], []) — "no MeSH data" — is the common case; trial_scope
+    treats that as "ambiguous", never as a reason to guess from text."""
+    s = snap.latest("ctgov", nct_id)
+    if s is None:
+        return [], []
+    study = _study_from_body(s.body_json())
+    cbm = (study.get("derivedSection") or {}).get("conditionBrowseModule") or {}
+    return list(cbm.get("meshes") or []), list(cbm.get("ancestors") or [])
 
 
 def _history_rows(nct_id: str, con: duckdb.DuckDBPyConnection) -> list[dict]:
@@ -370,15 +402,134 @@ def _band_for_score(score: int) -> int:
     return len(SCORE_BANDS) - 1
 
 
+def _has_evidence_events_table(con: duckdb.DuckDBPyConnection) -> bool:
+    return bool(con.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'evidence_events'"
+    ).fetchone())
+
+
+def _typed_events_for_trial(nct_id: str, con: duckdb.DuckDBPyConnection) -> list[dict]:
+    rows = con.execute(
+        """
+        SELECT event_date, event_type, field, direction, from_value, to_value, detail, to_version
+        FROM evidence_events WHERE nct_id = ? ORDER BY event_date
+        """,
+        [nct_id],
+    ).fetchall()
+    cols = ["date", "event_type", "field", "direction", "from_value", "to_value", "detail", "version"]
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        if d["date"] is not None and not isinstance(d["date"], str):
+            d["date"] = d["date"].isoformat()
+        out.append(d)
+    return out
+
+
+def _trial_history_coverage(nct_id: str, con: duckdb.DuckDBPyConnection) -> str:
+    """"full" / "partial" / "none" — whether we actually have enough
+    fetched history to trust an empty event timeline as "nothing
+    happened" rather than "we never looked".
+
+    Diagnosed 2026-08-27: a trial with zero history_index rows renders
+    the exact same empty timeline as a trial that was genuinely never
+    amended — the single strongest silence signal this project has — and
+    the two are visually indistinguishable in the review screen. Missing
+    data must never be servable as evidence, so this is computed from the
+    same facts the backfill orchestrator itself uses to decide what still
+    needs fetching (history/orchestrator.py's `to_fetch` query), not
+    guessed at:
+
+    - no history_index row at all -> "none": we have never indexed this
+      trial's amendment history. (A version-history refresh is cheap —
+      one request — so this should be rare once backfill has run.)
+    - indexed, single version only (max version 0) -> "full": this is a
+      complete, positive fact — the trial has never been amended since
+      registration — not an absence of information.
+    - indexed, multi-version: "full" only if every version whose
+      changed_modules intersects the signal-label set has had its body
+      actually fetched (bodies_fetched_through_version covers it); a
+      version with no signal-relevant module change needs no body fetch
+      to know nothing tracked happened, so it doesn't count against
+      coverage. Otherwise "partial".
+    - a backfill_queue row with status='error' caps this at "partial" —
+      the last refresh attempt failed, so even existing history_index
+      rows might be stale (missing newer versions we don't know about).
+    """
+    versions = con.execute(
+        "SELECT version, changed_modules FROM history_index WHERE nct_id = ?", [nct_id]
+    ).fetchall()
+    if not versions:
+        return "none"
+
+    bq = con.execute(
+        "SELECT status, bodies_fetched_through_version FROM backfill_queue WHERE nct_id = ?", [nct_id]
+    ).fetchone()
+    errored = bool(bq and bq[0] == "error")
+
+    max_version = max(v for v, _ in versions)
+    if max_version == 0:
+        return "partial" if errored else "full"
+
+    signal_versions = [
+        v for v, mods in versions
+        if v > 0 and mods and set(mods) & RECOMMENDED_SIGNAL_LABELS
+    ]
+    max_signal_version = max(signal_versions) if signal_versions else 0
+    bodies_fetched = bq[1] if bq and bq[1] is not None else -1
+
+    complete = max_signal_version == 0 or bodies_fetched >= max_signal_version
+    if errored or not complete:
+        return "partial"
+    return "full"
+
+
+def _program_history_coverage(trial_coverages: list[str]) -> str:
+    if not trial_coverages or all(c == "none" for c in trial_coverages):
+        return "none"
+    if all(c == "full" for c in trial_coverages):
+        return "full"
+    return "partial"
+
+
 def build_program(
     candidate_row: dict, con: duckdb.DuckDBPyConnection, as_of: Optional[date] = None,
+    combo_trial_shared_with: Optional[dict] = None, has_evidence_events: Optional[bool] = None,
 ) -> dict:
     as_of = as_of or date.today()
+    combo_trial_shared_with = combo_trial_shared_with or {}
+    if has_evidence_events is None:
+        has_evidence_events = _has_evidence_events_table(con)
+
+    all_nct_ids = candidate_row["nct_ids"]
+    excluded_shared_trials = [
+        {"nct_id": n, "shared_with": combo_trial_shared_with[n]}
+        for n in all_nct_ids if n in combo_trial_shared_with
+    ]
+    included_ids = [n for n in all_nct_ids if n not in combo_trial_shared_with]
+
     trials: list[TrialSummary] = []
-    for nct_id in candidate_row["nct_ids"]:
+    trial_scope: dict[str, str] = {}
+    for nct_id in included_ids:
         t = summarize_trial(nct_id, con)
         if t is not None:
             trials.append(t)
+        # computed independently of whether summarize_trial resolved a
+        # snapshot at all — a trial we know nothing about must classify
+        # ambiguous, not be silently absent from the scope rollup
+        meshes, ancestors = _condition_browse_data(nct_id)
+        trial_scope[nct_id] = ts.classify_trial(
+            meshes, ancestors, t.conditions if t is not None else [],
+        )
+
+    # computed over ALL included trials, not just ones summarize_trial
+    # could resolve — a trial with no snapshot at all is exactly the
+    # "we never looked" case this exists to catch, not something to skip
+    trial_coverage = {n: _trial_history_coverage(n, con) for n in included_ids}
+    history_coverage = _program_history_coverage(list(trial_coverage.values()))
+
+    scope_values = list(trial_scope.values())
+    scope_category = ts.classify_asset(scope_values)
 
     score, breakdown = compute_silence_score(trials, as_of)
     archetypes = classify_archetypes(trials)
@@ -386,13 +537,24 @@ def build_program(
 
     timeline = []
     for t in trials:
-        for h in t.history:
-            timeline.append({
-                "nct_id": t.nct_id, "version": h["version"],
-                "date": h["posted_date"], "status": h["status"],
-                "changed_modules": h["changed_modules"],
-                "label": "amendment (untyped — EvidenceEvent extraction not built yet)",
-            })
+        typed_events = _typed_events_for_trial(t.nct_id, con) if has_evidence_events else []
+        if typed_events:
+            for e in typed_events:
+                timeline.append({
+                    "nct_id": t.nct_id, "version": e["version"], "date": e["date"],
+                    "status": None, "changed_modules": None,
+                    "event_type": e["event_type"], "field": e["field"], "direction": e["direction"],
+                    "from_value": e["from_value"], "to_value": e["to_value"],
+                    "label": e["detail"],
+                })
+        else:
+            for h in t.history:
+                timeline.append({
+                    "nct_id": t.nct_id, "version": h["version"],
+                    "date": h["posted_date"], "status": h["status"],
+                    "changed_modules": h["changed_modules"],
+                    "label": "amendment (untyped — no extracted events for this trial yet)",
+                })
         timeline.append({
             "nct_id": t.nct_id, "version": None,
             "date": t.last_update_post_date.isoformat() if t.last_update_post_date else None,
@@ -411,7 +573,20 @@ def build_program(
         "provisional": True,
         "sponsors_over_time": candidate_row["sponsors_over_time"],
         "trial_count": len(trials),
-        "nct_ids": candidate_row["nct_ids"],
+        "nct_ids": included_ids,
+        "excluded_shared_trials": excluded_shared_trials,
+        # trial-level MeSH scope classification (trial_scope.py) — a hint,
+        # never a silent decision. See scripts/apply_auto_scope_exclusions.py
+        # for the only place a "heme_only" verdict here turns into an
+        # actual gold record, and only after the validation sample clears
+        # trial_scope.AGREEMENT_THRESHOLD.
+        "trial_scope": trial_scope,
+        "scope_category": scope_category,
+        "spans_heme_and_solid": ts.spans_heme_and_solid(scope_values),
+        "non_oncology_hint": ts.is_non_oncology_asset(scope_values),
+        "non_industry_sponsor_hint": ts.is_non_industry_sponsor(candidate_row["sponsors_over_time"]),
+        "history_coverage": history_coverage,
+        "trial_coverage": trial_coverage,
         "silence_score": score,
         "score_breakdown": breakdown,
         "band": _band_for_score(score),
@@ -422,28 +597,73 @@ def build_program(
         "trials": [t.to_json() for t in trials],
         "timeline": timeline,
         "review_status": candidate_row["review_status"],
+        "discovery_strategy": candidate_row.get("discovery_strategy"),
+        "match_strength": candidate_row.get("match_strength"),
+        "matched_term": candidate_row.get("matched_term"),
         "built_at": datetime.now().isoformat(),
+    }
+
+
+def _asset_candidates_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
+    return {
+        r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'asset_candidates'"
+        ).fetchall()
     }
 
 
 def build_all_programs(
     con: duckdb.DuckDBPyConnection, as_of: Optional[date] = None,
 ) -> list[dict]:
+    from pharma_stats.discovery.candidates import genuine_combo_trial_ids
+
+    # discovery_strategy/match_strength/matched_term postdate this column's
+    # introduction — an asset_candidates table built by an older run of
+    # scripts/build_candidate_universe.py won't have them yet. Degrade to
+    # NULL rather than hard-crash the app; re-running discovery backfills
+    # the real values.
+    have_discovery_cols = {"discovery_strategy", "match_strength", "matched_term"} <= _asset_candidates_columns(con)
+    discovery_select = (
+        "discovery_strategy, match_strength, matched_term" if have_discovery_cols
+        else "NULL AS discovery_strategy, NULL AS match_strength, NULL AS matched_term"
+    )
+
     rows = con.execute(
-        """
+        f"""
         SELECT candidate_id, proposed_name, synonyms, sponsors_over_time,
-               nct_ids, review_status
+               nct_ids, review_status, strategies, ambiguous,
+               {discovery_select}
         FROM asset_candidates
         ORDER BY candidate_id
         """
     ).fetchall()
-    cols = ["candidate_id", "proposed_name", "synonyms", "sponsors_over_time", "nct_ids", "review_status"]
-    programs = []
+    cols = ["candidate_id", "proposed_name", "synonyms", "sponsors_over_time",
+            "nct_ids", "review_status", "strategies", "ambiguous",
+            "discovery_strategy", "match_strength", "matched_term"]
+    candidate_rows = []
     for r in rows:
         row = dict(zip(cols, r))
         if isinstance(row["sponsors_over_time"], str):
             row["sponsors_over_time"] = json.loads(row["sponsors_over_time"])
-        programs.append(build_program(row, con, as_of=as_of))
+        candidate_rows.append(row)
+
+    combo_ids = genuine_combo_trial_ids(candidate_rows)
+    shared_with: dict[str, list[str]] = {}
+    for nct_id in combo_ids:
+        names = sorted({c["proposed_name"] for c in candidate_rows if nct_id in (c["nct_ids"] or [])})
+        shared_with[nct_id] = names
+
+    has_events = _has_evidence_events_table(con)
+    programs = []
+    for row in candidate_rows:
+        # per-candidate view: exclude *this candidate's own name* from its own "shared with" list
+        own_shared = {
+            n: [name for name in shared_with[n] if name != row["proposed_name"]]
+            for n in (row["nct_ids"] or []) if n in shared_with
+        }
+        programs.append(build_program(
+            row, con, as_of=as_of, combo_trial_shared_with=own_shared, has_evidence_events=has_events,
+        ))
     return programs
 
 
@@ -454,27 +674,40 @@ def materialize(warehouse_db=None, as_of: Optional[date] = None) -> int:
     warehouse_db = warehouse_db or WAREHOUSE_DB  # resolved at call time, not import time
     con = duckdb.connect(str(warehouse_db))
     try:
+        # fully derived/rebuildable — drop rather than migrate in place so
+        # schema changes (e.g. a new column) never fail against a table
+        # built by an older version of this module
+        con.execute("DROP TABLE IF EXISTS provisional_programs")
         con.execute(PROVISIONAL_PROGRAMS_SCHEMA)
         programs = build_all_programs(con, as_of=as_of)
-        con.execute("DELETE FROM provisional_programs")
         con.executemany(
             """
             INSERT INTO provisional_programs
                 (program_id, candidate_id, proposed_name, synonyms, indication_code,
                  line_of_therapy, provisional, sponsors_over_time, trial_count, nct_ids,
-                 silence_score, score_breakdown, band, archetypes, primary_archetype,
-                 latest_status, latest_nct_id, trials, timeline, review_status, built_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 excluded_shared_trials, history_coverage, trial_coverage, silence_score,
+                 score_breakdown, band, archetypes, primary_archetype, latest_status,
+                 latest_nct_id, trials, timeline, review_status,
+                 discovery_strategy, match_strength, matched_term,
+                 trial_scope, scope_category, spans_heme_and_solid,
+                 non_oncology_hint, non_industry_sponsor_hint, built_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     p["program_id"], p["candidate_id"], p["proposed_name"], p["synonyms"],
                     p["indication_code"], p["line_of_therapy"], p["provisional"],
                     json.dumps(p["sponsors_over_time"]), p["trial_count"], p["nct_ids"],
+                    json.dumps(p["excluded_shared_trials"]), p["history_coverage"],
+                    json.dumps(p["trial_coverage"]),
                     p["silence_score"], json.dumps(p["score_breakdown"]), p["band"],
                     p["archetypes"], p["primary_archetype"], p["latest_status"],
                     p["latest_nct_id"], json.dumps(p["trials"]), json.dumps(p["timeline"]),
-                    p["review_status"], p["built_at"],
+                    p["review_status"],
+                    p["discovery_strategy"], p["match_strength"], p["matched_term"],
+                    json.dumps(p["trial_scope"]), p["scope_category"], p["spans_heme_and_solid"],
+                    p["non_oncology_hint"], p["non_industry_sponsor_hint"],
+                    p["built_at"],
                 )
                 for p in programs
             ],
@@ -495,12 +728,26 @@ def load_materialized(warehouse_db=None) -> list[dict]:
         ).fetchone()
         if existing is None:
             return []
+        table_cols = {
+            r[0] for r in con.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'provisional_programs'"
+            ).fetchall()
+        }
+        if "scope_category" not in table_cols:
+            # built by an older version of this module, before that column
+            # existed — treat as unmaterialized rather than hard-crash; the
+            # caller's usual "not materialized yet" path rebuilds it fresh
+            return []
         rows = con.execute(
             """
             SELECT program_id, candidate_id, proposed_name, synonyms, indication_code,
                    line_of_therapy, provisional, sponsors_over_time, trial_count, nct_ids,
-                   silence_score, score_breakdown, band, archetypes, primary_archetype,
-                   latest_status, latest_nct_id, trials, timeline, review_status, built_at
+                   excluded_shared_trials, history_coverage, trial_coverage, silence_score,
+                   score_breakdown, band, archetypes, primary_archetype, latest_status,
+                   latest_nct_id, trials, timeline, review_status,
+                   discovery_strategy, match_strength, matched_term,
+                   trial_scope, scope_category, spans_heme_and_solid,
+                   non_oncology_hint, non_industry_sponsor_hint, built_at
             FROM provisional_programs ORDER BY program_id
             """
         ).fetchall()
@@ -509,13 +756,18 @@ def load_materialized(warehouse_db=None) -> list[dict]:
     cols = [
         "program_id", "candidate_id", "proposed_name", "synonyms", "indication_code",
         "line_of_therapy", "provisional", "sponsors_over_time", "trial_count", "nct_ids",
-        "silence_score", "score_breakdown", "band", "archetypes", "primary_archetype",
-        "latest_status", "latest_nct_id", "trials", "timeline", "review_status", "built_at",
+        "excluded_shared_trials", "history_coverage", "trial_coverage", "silence_score",
+        "score_breakdown", "band", "archetypes", "primary_archetype", "latest_status",
+        "latest_nct_id", "trials", "timeline", "review_status",
+        "discovery_strategy", "match_strength", "matched_term",
+        "trial_scope", "scope_category", "spans_heme_and_solid",
+        "non_oncology_hint", "non_industry_sponsor_hint", "built_at",
     ]
     out = []
     for r in rows:
         d = dict(zip(cols, r))
-        for k in ("sponsors_over_time", "score_breakdown", "trials", "timeline"):
+        for k in ("sponsors_over_time", "score_breakdown", "trials", "timeline",
+                   "excluded_shared_trials", "trial_coverage", "trial_scope"):
             if isinstance(d[k], str):
                 d[k] = json.loads(d[k])
         out.append(d)

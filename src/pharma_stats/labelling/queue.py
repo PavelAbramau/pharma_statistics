@@ -117,6 +117,7 @@ def make_serve_token(
         "band": program["band"],
         "archetype": program["primary_archetype"],
         "silence_score": program["silence_score"],
+        "history_coverage": program["history_coverage"],
         "is_repeat_probe": is_repeat,
         "served_at": datetime.now(timezone.utc).isoformat(),
     }

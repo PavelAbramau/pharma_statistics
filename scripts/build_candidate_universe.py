@@ -89,6 +89,9 @@ def main() -> None:
             strategies VARCHAR[],
             ambiguous BOOLEAN,
             dev_code_only BOOLEAN,
+            discovery_strategy VARCHAR,
+            match_strength VARCHAR,
+            matched_term VARCHAR,
             review_status VARCHAR
         )
         """
@@ -96,13 +99,15 @@ def main() -> None:
     for c in candidates:
         con.execute(
             """
-            INSERT INTO asset_candidates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO asset_candidates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 c.candidate_id, c.proposed_name, c.synonyms,
                 json.dumps(c.sponsors_over_time), c.trial_count, c.nct_ids,
                 c.first_trial_start_date, c.last_trial_start_date,
-                c.strategies, c.ambiguous, c.dev_code_only, c.review_status,
+                c.strategies, c.ambiguous, c.dev_code_only,
+                c.discovery_strategy, c.match_strength, c.matched_term,
+                c.review_status,
             ],
         )
     con.close()
@@ -115,7 +120,9 @@ def main() -> None:
         writer.writerow([
             "candidate_id", "proposed_name", "synonyms", "sponsors",
             "trial_count", "first_trial_start_date", "last_trial_start_date",
-            "strategies", "ambiguous", "dev_code_only", "review_status", "nct_ids",
+            "strategies", "ambiguous", "dev_code_only",
+            "discovery_strategy", "match_strength", "matched_term",
+            "review_status", "nct_ids",
         ])
         for c in candidates:
             sponsor_str = "; ".join(
@@ -125,8 +132,9 @@ def main() -> None:
             writer.writerow([
                 c.candidate_id, c.proposed_name, "; ".join(c.synonyms), sponsor_str,
                 c.trial_count, c.first_trial_start_date, c.last_trial_start_date,
-                "; ".join(c.strategies), c.ambiguous, c.dev_code_only, c.review_status,
-                "; ".join(c.nct_ids),
+                "; ".join(c.strategies), c.ambiguous, c.dev_code_only,
+                c.discovery_strategy, c.match_strength, c.matched_term,
+                c.review_status, "; ".join(c.nct_ids),
             ])
     print(f"Wrote {csv_path}")
 

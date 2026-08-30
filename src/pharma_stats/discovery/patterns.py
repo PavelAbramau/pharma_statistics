@@ -35,6 +35,12 @@ SUFFIX_TERMS = [
     "ravtansine",    # DM4 (maytansinoid) — catches "soravtansine" too, kept separate for recall
     "duocarmazine",  # duocarmycin
     "tirumotecan",   # DXd-class (e.g. sacituzumab tirumotecan / MK-2870)
+    # Added 2026-08-26 after a recall-gap audit against an independently
+    # sourced known-ADC list found these four missing entirely:
+    "rezetecan",     # DXd-class (e.g. trastuzumab rezetecan / SHR-A1811)
+    "rilsodotin",    # NAMPTi payload (e.g. upifitamab rilsodotin / XMT-1536)
+    "sesutecan",     # topo1-class (e.g. rinatabart sesutecan / GEN1184)
+    "pamirtecan",    # topo1-class (e.g. trastuzumab pamirtecan / BNT323/DB-1303)
 ]
 
 # Descriptive terms that indicate "this is an ADC" without a fixed suffix.
@@ -77,9 +83,21 @@ NON_ADC_DENYLIST = {
 # false positives get pruned by a human.
 _DEV_CODE_RE = re.compile(r"^[A-Za-z]{2,8}[-\s]?\d{2,6}[A-Za-z]{0,3}$")
 
+# Common trailing formulation/dosage-form qualifiers sponsors append to an
+# otherwise bare dev code (e.g. "SKB410 for injection"). Diagnosed
+# 2026-08-26: this made the recall probe report SKB410 as "missed by
+# discovery" when the real cause was that the qualifier alone broke the
+# dev-code match, keeping strategy 3 from ever accepting the mention.
+_TRAILING_FORMULATION_RE = re.compile(
+    r"\s+for\s+(injection|infusion|intravenous\s+use)\s*$", re.IGNORECASE,
+)
+
 
 def looks_like_dev_code(name: str) -> bool:
-    return bool(_DEV_CODE_RE.match(name.strip()))
+    stripped = name.strip()
+    if _DEV_CODE_RE.match(stripped):
+        return True
+    return bool(_DEV_CODE_RE.match(_TRAILING_FORMULATION_RE.sub("", stripped)))
 
 
 def matches_pattern(name: str) -> Optional[tuple[str, str]]:

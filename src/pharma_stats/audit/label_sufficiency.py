@@ -21,8 +21,13 @@ CONVERGED_THRESHOLD_DAYS = 1.0  # marginal narrowing below this = "stopped movin
 
 
 def _lead_times_in_label_order(records: list[dict]) -> list[int]:
+    # gate 3 only: a gate 1/2 triage rejection was never a program, so it
+    # must never count as a "label" toward this sufficiency bootstrap.
     non_repeat = sorted(
-        (r for r in records if r["action"] == "label" and not r["is_repeat_probe"]),
+        (
+            r for r in records
+            if r["action"] == "label" and r.get("gate_reached") == 3 and not r["is_repeat_probe"]
+        ),
         key=lambda r: r["timestamp"],
     )
     out = []

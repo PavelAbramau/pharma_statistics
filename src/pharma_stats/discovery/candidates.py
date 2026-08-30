@@ -92,6 +92,8 @@ class Mention:
     overall_status: Optional[str]
     brief_title: str
     match_strength: Optional[str] = None  # "suffix" | "literal" | "seed" | "dev_code" | None
+    match_term: Optional[str] = None  # the specific SUFFIX_TERMS/LITERAL_TERMS entry (or seed
+    # name) that matched — None for a bare dev_code guess, which carries no name-pattern evidence
 
 
 class UnionFind:
@@ -171,6 +173,7 @@ def iter_pattern_matches(client: CtgovClient, *, max_per_query: int = 5000) -> I
                     intervention_type=entry.get("type", ""),
                     strategy="pattern_match",
                     match_strength=hit[0],
+                    match_term=hit[1],
                     **ctx,
                 )
 
@@ -200,6 +203,7 @@ def iter_seed_matches(client: CtgovClient, seed_assets: list[dict]) -> Iterator[
                         intervention_type=entry.get("type", ""),
                         strategy="seed_expansion",
                         match_strength="seed",
+                        match_term=term,  # the specific seed name/synonym this query searched for
                         **ctx,
                     )
 
@@ -243,6 +247,7 @@ def iter_sponsor_matches(
                     intervention_type=entry.get("type", ""),
                     strategy="sponsor_expansion",
                     match_strength=pattern_hit[0] if pattern_hit else "dev_code",
+                    match_term=pattern_hit[1] if pattern_hit else None,
                     **ctx,
                 )
 
@@ -262,6 +267,14 @@ class CandidateAsset:
     strategies: list[str]
     ambiguous: bool
     dev_code_only: bool
+    # The single weakest piece of discovery evidence behind this candidate
+    # (see _primary_evidence) — the one most implicated if a human review
+    # later finds it isn't really an ADC. Used to group Gate 1 rejections
+    # by matching pattern so patterns.py tuning has a real signal instead
+    # of "some rejections happened".
+    discovery_strategy: Optional[str] = None
+    match_strength: Optional[str] = None
+    matched_term: Optional[str] = None
     review_status: str = "unreviewed"
 
 
@@ -465,6 +478,27 @@ def _mention_spans_multiple_compounds(keys: list[str]) -> bool:
     return len(all_suffixes_seen) >= 2
 
 
+# Confidence ranking, weakest first: a dev_code guess carries zero
+# name-pattern evidence at all; a literal term ("conjugate", "adc") is
+# explicitly weak per patterns.py; seed_expansion matched a known real
+# ADC's own name; suffix is the curated INN naming convention — the
+# strongest signal this pipeline has. The WEAKEST entry present in a
+# candidate's mentions is the one to blame if it turns out not to be a
+# real ADC, since anything with a seed/suffix hit is essentially never a
+# false positive.
+_STRENGTH_RANK = {"dev_code": 0, "literal": 1, "seed": 2, "suffix": 3}
+
+
+def _primary_evidence(group: list[Mention]) -> tuple[str, Optional[str], Optional[str]]:
+    """(strategy, match_strength, matched_term) for the weakest evidence in
+    the cluster — see _STRENGTH_RANK."""
+    best = min(
+        group,
+        key=lambda m: (_STRENGTH_RANK.get(m.match_strength, 0), m.strategy, m.match_term or ""),
+    )
+    return best.strategy, best.match_strength, best.match_term
+
+
 def build_candidate_table(mentions: list[Mention]) -> list[CandidateAsset]:
     uf = UnionFind()
     all_keys: set[str] = set()
@@ -519,6 +553,7 @@ def build_candidate_table(mentions: list[Mention]) -> list[CandidateAsset]:
         strengths = {m.match_strength for m in group}
         ambiguous = strengths <= {"literal"}  # only weak literal hits, nothing corroborating
         dev_code_only = strengths <= {"dev_code"}  # only an unnamed-compound-code guess, no ADC signal at all
+        discovery_strategy, match_strength, matched_term = _primary_evidence(group)
 
         candidates.append(
             CandidateAsset(
@@ -533,8 +568,39 @@ def build_candidate_table(mentions: list[Mention]) -> list[CandidateAsset]:
                 strategies=strategies,
                 ambiguous=ambiguous,
                 dev_code_only=dev_code_only,
+                discovery_strategy=discovery_strategy,
+                match_strength=match_strength,
+                matched_term=matched_term,
             )
         )
 
     candidates.sort(key=lambda c: c.proposed_name.lower())
     return candidates
+
+
+def genuine_combo_trial_ids(candidates: list[dict]) -> set[str]:
+    """Trial ids shared by 2+ candidates that are ALL independently
+    verified (found by pattern_match or seed_expansion, not merely a
+    weak literal-term match) — the signature of a real trial testing
+    multiple distinct assets together, not a clustering error (see the
+    _is_untrusted_identity_key family above for that failure mode).
+
+    Used by both the audit's universe stage and the labelling app's
+    provisional program builder — the two need the exact same answer to
+    "is this shared trial real or noise", so this lives in one place.
+    Takes plain dicts (candidate_id/proposed_name/nct_ids/strategies/
+    ambiguous) rather than CandidateAsset so DB-row callers don't need to
+    round-trip through the dataclass.
+    """
+    nct_to_candidates: dict[str, list[dict]] = {}
+    for c in candidates:
+        for nct_id in c.get("nct_ids") or []:
+            nct_to_candidates.setdefault(nct_id, []).append(c)
+
+    def is_verified(c: dict) -> bool:
+        return bool(set(c.get("strategies") or []) & {"pattern_match", "seed_expansion"}) and not c.get("ambiguous")
+
+    return {
+        nct_id for nct_id, cs in nct_to_candidates.items()
+        if len(cs) > 1 and all(is_verified(c) for c in cs)
+    }
