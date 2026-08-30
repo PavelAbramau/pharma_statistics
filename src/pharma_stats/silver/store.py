@@ -39,6 +39,7 @@ def build_record(payload: dict, *, session_id: str) -> dict:
         "session_id": session_id,
         "labeller": "auto",
         "program_id": payload["program_id"],
+        "proposed_name": payload.get("proposed_name"),
         "status": payload.get("status"),
         "kill_reason": payload.get("kill_reason"),
         "public_confirmation_date": payload.get("public_confirmation_date"),
@@ -50,6 +51,8 @@ def build_record(payload: dict, *, session_id: str) -> dict:
         "answers": payload.get("answers"),
         "abstained": bool(payload.get("abstained")),
         "abstain_reason": payload.get("abstain_reason"),
+        # exactly which deterministic rule branch fired (questions.apply_deterministic_rules)
+        "rule_path": payload.get("rule_path"),
         # self-consistency sampling (silver/sampling.py): k samples, how
         # many agreed, and on what — the abstention signal
         "self_consistency": payload.get("self_consistency"),

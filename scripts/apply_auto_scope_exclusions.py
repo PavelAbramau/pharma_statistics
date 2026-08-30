@@ -9,13 +9,22 @@ asset stays in asset_candidates/provisional_programs, it's just no longer
 served by the review app (store.reviewed_program_ids treats any label
 record, auto or human, as terminal, same as a manual gate-1/2 rejection).
 
-Safety: before writing anything, this checks the CURRENT agreement rate on
-the held-out validation sample (see labelling/trial_scope.py;
-audit/universe.py's "heme_only auto-exclusion agreement" check runs the
-same comparison). Below trial_scope.AGREEMENT_THRESHOLD, it refuses to
-write any new auto-exclusions — the whole mechanism reverts to manual
-until agreement recovers, though the validation sample itself still gets
-topped up so there's something to keep measuring against.
+Safety, two independent gates:
+
+1. MeSH coverage across in-universe trials must be >= trial_scope.
+   MESH_COVERAGE_THRESHOLD (audit/universe.py's coverage gate checks the
+   same number) — a heme_only count from near-zero coverage isn't a clean
+   result, it's an absence of one. Run scripts/fetch_current_state.py
+   first if this refuses.
+2. The CURRENT agreement rate on the held-out validation sample (see
+   labelling/trial_scope.py; audit/universe.py's "heme_only auto-exclusion
+   agreement" check runs the same comparison) must be >=
+   trial_scope.AGREEMENT_THRESHOLD.
+
+Below either, this refuses to write any new auto-exclusions — the whole
+mechanism reverts to manual until both clear — though the validation
+sample itself still gets topped up so there's something to keep measuring
+against once coverage exists.
 """
 from __future__ import annotations
 
@@ -37,6 +46,13 @@ def main() -> None:
     if not programs:
         print("provisional_programs not materialized — run "
               "`python scripts/run_labelling_app.py --rebuild` first.")
+        return
+
+    coverage = ts.mesh_coverage(programs)
+    print(f"MeSH coverage: {coverage['coverage_rate']:.1%} ({coverage['covered']} / {coverage['total']})")
+    if coverage["coverage_rate"] < ts.MESH_COVERAGE_THRESHOLD:
+        print(f"Below the {ts.MESH_COVERAGE_THRESHOLD:.0%} coverage gate — refusing to run. "
+              "Run scripts/fetch_current_state.py to raise coverage first.")
         return
 
     records = store.load_records()

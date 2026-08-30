@@ -4,7 +4,10 @@ saturation curve (is discovery actually done, or would a 4th strategy
 still find a lot?)."""
 from __future__ import annotations
 
+import ast
+import inspect
 import re
+from pathlib import Path
 
 import duckdb
 
@@ -37,8 +40,10 @@ def run() -> list[Check]:
     checks += _recall_probe(candidates)
     checks += _clustering_and_backlog(candidates)
     checks += _saturation_curve(candidates)
+    checks += _mesh_coverage_gate()
     checks += _heme_solid_span_report()
     checks += _heme_only_auto_exclusion_agreement()
+    checks += _current_state_read_boundary()
     return checks
 
 
@@ -177,6 +182,62 @@ def _clustering_and_backlog(candidates: list[dict]) -> list[Check]:
             actual=f"{len(unreviewed)} / {len(candidates)}", detail="",
         ),
     ]
+
+
+def _mesh_coverage_gate() -> list[Check]:
+    """Coverage, not a count: below MESH_COVERAGE_THRESHOLD, a heme_only /
+    spans-both result isn't evidence of a clean universe — it's an
+    artefact of having almost no MeSH data to classify from. WARNs below
+    threshold; scripts/apply_auto_scope_exclusions.py checks the same
+    number and refuses to run when this would WARN."""
+    programs = pp.load_materialized()
+    threshold = ts.MESH_COVERAGE_THRESHOLD
+    if not programs:
+        return [info(
+            STAGE, f"MeSH coverage across in-universe trials (gate: >= {threshold:.0%})",
+            expected="provisional_programs materialized", actual="not materialized yet", detail="",
+        )]
+    result = ts.mesh_coverage(programs)
+    level = ok if result["coverage_rate"] >= threshold else warn
+    return [level(
+        STAGE, f"MeSH coverage across in-universe trials (gate: >= {threshold:.0%})",
+        expected=f">= {threshold:.0%} of trials have conditionBrowseModule data",
+        actual=f"{result['coverage_rate']:.1%} ({result['covered']} / {result['total']})",
+        detail="below threshold: a heme_only/spans-both count from this little coverage is not a "
+               "real result, and scripts/apply_auto_scope_exclusions.py refuses to run until this "
+               "clears — run scripts/fetch_current_state.py to raise coverage.",
+    )]
+
+
+def _current_state_read_boundary() -> list[Check]:
+    """Static enforcement of docs/decisions/0001-current-state-fetch-scope.md:
+    every function in provisional_programs.py EXCEPT the ones in its own
+    CURRENT_STATE_READ_WHITELIST must never call snap.latest/get_as_of —
+    those calls must go through the time-cut versioned-history path
+    instead. Catches a silence/model feature quietly starting to read a
+    current-state-only field before it ships, not after."""
+    source_path = Path(inspect.getsourcefile(pp))
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    whitelist = pp.CURRENT_STATE_READ_WHITELIST
+
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name in whitelist:
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if (isinstance(func, ast.Attribute) and func.attr in ("latest", "get_as_of")
+                    and isinstance(func.value, ast.Name) and func.value.id == "snap"):
+                violations.append(f"{node.name} (line {child.lineno})")
+
+    return [(fail if violations else ok)(
+        STAGE, "current-state read boundary (provisional_programs.py feature-layer discipline)",
+        expected="only CURRENT_STATE_READ_WHITELIST functions call snap.latest/get_as_of",
+        actual=f"{len(violations)} violation(s)",
+        detail=", ".join(violations[:10]),
+    )]
 
 
 def _heme_solid_span_report() -> list[Check]:

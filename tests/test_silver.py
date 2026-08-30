@@ -1,16 +1,16 @@
 """Tests for the silver (auto-labelled) track: the gold/silver isolation
 guarantee, the decomposed-question deterministic rules, the citation
-gate, and the strict eval-split/scoring math. Model-invocation stubs
-(sampling.sample_answers, red_team.generate_objection) are checked only
-for raising NotImplementedError — there's nothing else to test until a
-model-invocation mechanism is chosen."""
+gate, the strict eval-split/scoring math, and the model-wired pieces
+(sampling, red_team, prompts) with the actual Anthropic call mocked out —
+no test in this file makes a real API call."""
 from __future__ import annotations
 
 import pytest
 
 from pharma_stats.audit import gold_set
 from pharma_stats.labelling import store
-from pharma_stats.silver import citations, eval as silver_eval, questions, red_team, retrieval_agent, sampling
+from pharma_stats.silver import citations, eval as silver_eval, evidence, prompts, questions
+from pharma_stats.silver import red_team, retrieval_agent, sampling
 from pharma_stats.silver import store as silver_store
 from pharma_stats.silver.questions import (
     NOT_DETERMINABLE,
@@ -106,6 +106,7 @@ def test_deterministic_rules_dead_confirmed_with_reason():
     assert result == {
         "status": "dead_confirmed", "kill_reason": "futility_efficacy",
         "public_confirmation_date": "2025-01-01", "never_publicly_confirmed": False, "abstain": False,
+        "rule_path": "dead_confirmed:efficacy",
     }
 
 
@@ -233,9 +234,16 @@ def test_majority_vote_and_should_abstain():
     assert sampling.should_abstain([]) is True
 
 
-def test_sample_answers_not_implemented():
-    with pytest.raises(NotImplementedError):
-        sampling.sample_answers(lambda: "x")
+def test_sample_answers_calls_question_fn_k_times():
+    calls = []
+
+    def question_fn():
+        calls.append(1)
+        return "x"
+
+    result = sampling.sample_answers(question_fn, k=5, temperature=1.0)
+    assert result == ["x"] * 5
+    assert len(calls) == 5
 
 
 # --------------------------------------------------------------- red team --
@@ -254,9 +262,37 @@ def test_forces_abstention_requires_strong_and_evidenced():
     assert red_team.forces_abstention(weak_evidenced) is False
 
 
-def test_generate_objection_not_implemented():
-    with pytest.raises(NotImplementedError):
-        red_team.generate_objection({}, {})
+def test_generate_objection_strong_with_verified_citation(monkeypatch):
+    monkeypatch.setattr(
+        red_team.model_client, "complete",
+        lambda prompt, **kw: '{"strength": "strong", "argument": "x", "nct_id": "NCT1", "quote": "y"}',
+    )
+    monkeypatch.setattr(red_team.citation_gate, "resolve_and_verify", lambda c: True)
+    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    assert objection.strength == "strong"
+    assert len(objection.citations) == 1
+    assert red_team.forces_abstention(objection) is True
+    assert log["model"] == red_team.model_client.RED_TEAM_MODEL
+    assert log["citation_verdict"]["passed"] is True
+
+
+def test_generate_objection_downgrades_strong_with_failed_citation(monkeypatch):
+    monkeypatch.setattr(
+        red_team.model_client, "complete",
+        lambda prompt, **kw: '{"strength": "strong", "argument": "x", "nct_id": "NCT1", "quote": "y"}',
+    )
+    monkeypatch.setattr(red_team.citation_gate, "resolve_and_verify", lambda c: False)
+    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    assert objection.strength == "weak"  # downgraded — an unverifiable citation can't back "strong"
+    assert objection.citations == []
+    assert red_team.forces_abstention(objection) is False
+
+
+def test_generate_objection_handles_unparseable_response(monkeypatch):
+    monkeypatch.setattr(red_team.model_client, "complete", lambda prompt, **kw: "not json")
+    objection, log = red_team.generate_objection({"status": "active"}, {"trials": []})
+    assert objection.strength == "weak"
+    assert red_team.forces_abstention(objection) is False
 
 
 # ---------------------------------------------------------- retrieval agent --
@@ -284,3 +320,97 @@ def test_press_archive_and_conference_search_not_implemented():
         retrieval_agent.search_sponsor_press_archive()
     with pytest.raises(NotImplementedError):
         retrieval_agent.search_conference_abstracts()
+
+
+# ---------------------------------------------------------------- evidence --
+
+def test_build_evidence_and_evidence_text():
+    program = {
+        "trials": [{
+            "nct_id": "NCT1", "status": "TERMINATED", "why_stopped": "Lack of efficacy in interim analysis.",
+            "completion_date": "2024-01-01", "last_update_post_date": "2024-01-15", "start_date": "2020-01-01",
+        }],
+        "timeline": [
+            {"nct_id": "NCT1", "date": "2024-01-15", "event_type": "status_changed", "label": "status changed"},
+        ],
+    }
+    ev = evidence.build_evidence(program)
+    text = evidence.evidence_text(ev)
+    assert "NCT1" in text
+    assert "Lack of efficacy" in text
+    assert "status_changed" in text
+
+
+def test_evidence_text_handles_no_trials():
+    assert evidence.evidence_text({"trials": [], "timeline": []}) == "(no trial data on file for this program)"
+
+
+def test_trials_initiated_since():
+    program = {"trials": [{"start_date": "2023-06-01"}, {"start_date": "2020-01-01"}]}
+    assert evidence.trials_initiated_since(program, "2022-01-01") is True
+    assert evidence.trials_initiated_since(program, "2024-01-01") is False
+    assert evidence.trials_initiated_since({"trials": []}, "2022-01-01") is False
+
+
+# ---------------------------------------------------------------- prompts --
+
+def test_ask_discontinuation_statement_unanimous_yes_with_valid_citation(monkeypatch):
+    program = {
+        "trials": [{"nct_id": "NCT1", "status": "TERMINATED", "why_stopped": "Lack of efficacy.",
+                     "completion_date": "2024-01-01", "last_update_post_date": None, "start_date": None}],
+        "timeline": [],
+    }
+    ev = evidence.build_evidence(program)
+    response = '{"exists": true, "statement_date": "2024-01-01", "nct_id": "NCT1", "quote": "Lack of efficacy."}'
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: response)
+    monkeypatch.setattr(prompts.citation_gate, "resolve_and_verify", lambda c: True)
+
+    answer, log = prompts.ask_discontinuation_statement("Drug X", ev)
+    assert answer.exists is True
+    assert answer.statement_date == "2024-01-01"
+    assert len(answer.citations) == 1
+    assert log["disagreement"] is False
+    assert len(log["raw_responses"]) == 5
+
+
+def test_ask_discontinuation_statement_disagreement_abstains(monkeypatch):
+    ev = evidence.build_evidence({"trials": [], "timeline": []})
+    responses = iter([
+        '{"exists": true, "statement_date": null, "nct_id": "NCT1", "quote": "x"}',
+        '{"exists": false, "statement_date": null, "nct_id": null, "quote": null}',
+        '{"exists": true, "statement_date": null, "nct_id": "NCT1", "quote": "x"}',
+        '{"exists": false, "statement_date": null, "nct_id": null, "quote": null}',
+        '{"exists": true, "statement_date": null, "nct_id": "NCT1", "quote": "x"}',
+    ])
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: next(responses))
+    answer, log = prompts.ask_discontinuation_statement("Drug X", ev)
+    assert answer.exists == questions.NOT_DETERMINABLE
+    assert log["disagreement"] is True
+
+
+def test_ask_discontinuation_statement_yes_but_citation_fails_abstains(monkeypatch):
+    ev = evidence.build_evidence({"trials": [], "timeline": []})
+    response = '{"exists": true, "statement_date": "2024-01-01", "nct_id": "NCT1", "quote": "made up quote"}'
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: response)
+    monkeypatch.setattr(prompts.citation_gate, "resolve_and_verify", lambda c: False)
+    answer, log = prompts.ask_discontinuation_statement("Drug X", ev)
+    assert answer.exists == questions.NOT_DETERMINABLE
+    assert log["citation_verdict"]["passed"] is False
+
+
+def test_ask_stop_reason_unanimous_with_valid_citation(monkeypatch):
+    ev = evidence.build_evidence({"trials": [], "timeline": []})
+    response = '{"category": "safety", "nct_id": "NCT1", "quote": "toxicity observed"}'
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: response)
+    monkeypatch.setattr(prompts.citation_gate, "resolve_and_verify", lambda c: True)
+    answer, log = prompts.ask_stop_reason("Drug X", ev)
+    assert answer.category == "safety"
+    assert len(answer.citations) == 1
+
+
+def test_ask_successor_asset_always_abstains_no_api_call(monkeypatch):
+    called = []
+    monkeypatch.setattr(prompts.model_client, "complete", lambda *a, **kw: called.append(1) or "{}")
+    answer, log = prompts.ask_successor_asset("Drug X", {"trials": []})
+    assert answer.exists == questions.NOT_DETERMINABLE
+    assert called == []  # no model call made — no citable evidence source exists for this question yet

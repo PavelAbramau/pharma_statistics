@@ -16,9 +16,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
-# Ad hoc statistical EDA scripts only (e.g. scripts/eda_silence_features.py)
-# — never a runtime dependency of the pipeline itself.
-analysis = ["numpy>=1.26", "scipy>=1.11", "matplotlib>=3.8"]
+# Ad hoc statistical EDA scripts only (e.g. scripts/eda_silence_features.py,
+# scripts/build_eda_dashboard.py) — never a runtime dependency of the
+# pipeline itself.
+analysis = ["numpy>=1.26", "scipy>=1.11", "matplotlib>=3.8", "pandas>=2.1", "lifelines>=0.28"]
+# scripts/run_silver_labelling.py only — requires ANTHROPIC_API_KEY.
+silver = ["anthropic>=0.125"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

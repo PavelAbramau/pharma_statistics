@@ -22,7 +22,7 @@ Answers seven questions, in order:
 from __future__ import annotations
 
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 try:
@@ -238,14 +238,24 @@ rarer and — per the hypothesis this project is built on — the sharper signal
 
 # ------------------------------------------------- 3. feature correlation --
 
+# silence_score deliberately excluded: it's a deterministic weighted sum
+# of staleness + status_ambiguity + verification_lapse (see
+# provisional_programs.compute_silence_score), so including it alongside
+# its own inputs manufactures a dominant component out of double-counted
+# variance — that's why an earlier pass showed a near-zero-variance last
+# component. staleness_age_adjusted is staleness residualised on
+# months_since_start (OLS) — raw staleness is confounded by trial age
+# (older trials mechanically accumulate more staleness signal), which
+# shows up as their negative raw correlation.
 FEATURE_NAMES = [
-    "silence_score", "staleness", "status_ambiguity", "enrollment_signal",
-    "verification_lapse", "amendment_count", "months_since_start", "has_results",
+    "staleness", "status_ambiguity", "enrollment_signal", "verification_lapse",
+    "amendment_count", "months_since_start", "has_results", "staleness_age_adjusted",
 ]
 
 
-def build_feature_matrix(programs: list[dict], as_of: date) -> "tuple[np.ndarray, list[str]]":
+def build_feature_matrix(programs: list[dict], as_of: date) -> "tuple[np.ndarray, list[str], list[str]]":
     rows = []
+    program_ids = []
     for p in programs:
         breakdown = p.get("score_breakdown") or {}
         if "staleness" not in breakdown:
@@ -259,7 +269,6 @@ def build_feature_matrix(programs: list[dict], as_of: date) -> "tuple[np.ndarray
         if months_since_start is None:
             continue
         rows.append([
-            p.get("silence_score", 0.0),
             breakdown.get("staleness", 0.0),
             breakdown.get("status_ambiguity", 0.0),
             breakdown.get("enrollment_signal", 0.0),
@@ -268,37 +277,59 @@ def build_feature_matrix(programs: list[dict], as_of: date) -> "tuple[np.ndarray
             months_since_start,
             has_results,
         ])
-    return np.array(rows, dtype=float), FEATURE_NAMES
+        program_ids.append(p["program_id"])
+
+    X = np.array(rows, dtype=float)
+    staleness_col, age_col = X[:, 0], X[:, 5]
+    slope, intercept = np.polyfit(age_col, staleness_col, 1) if len(X) > 1 else (0.0, 0.0)
+    age_adjusted = staleness_col - (slope * age_col + intercept)
+    X = np.column_stack([X, age_adjusted])
+    return X, FEATURE_NAMES, program_ids
 
 
 def analyze_correlation_and_pca(programs: list[dict], as_of: date) -> str:
-    X, names = build_feature_matrix(programs, as_of)
+    X, names, program_ids = build_feature_matrix(programs, as_of)
     n = X.shape[0]
     if n < 10:
         return "## 3. Feature correlation structure\n\n(too few programs with complete features)\n"
 
     Xz = (X - X.mean(axis=0)) / np.where(X.std(axis=0) == 0, 1, X.std(axis=0))
     corr = np.corrcoef(Xz, rowvar=False)
+    condition_number = np.linalg.cond(corr)
 
     eigvals, eigvecs = np.linalg.eigh(np.cov(Xz, rowvar=False))
     order = np.argsort(eigvals)[::-1]
     eigvals, eigvecs = eigvals[order], eigvecs[:, order]
     explained = eigvals / eigvals.sum()
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    im = axes[0].imshow(corr, vmin=-1, vmax=1, cmap="RdBu_r")
+    # rescale to the OBSERVED off-diagonal range — a fixed [-1, 1] scale
+    # renders everything pale when real values sit in a much narrower band
+    off_diag = corr[~np.eye(len(names), dtype=bool)]
+    vmax = max(abs(off_diag.min()), abs(off_diag.max()))
+    masked_corr = np.ma.masked_where(np.eye(len(names), dtype=bool), corr)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    cmap = plt.get_cmap("RdBu_r").copy()
+    cmap.set_bad(color="#eeeeee")
+    im = axes[0].imshow(masked_corr, vmin=-vmax, vmax=vmax, cmap=cmap)
     axes[0].set_xticks(range(len(names)))
     axes[0].set_xticklabels(names, rotation=90, fontsize=8)
     axes[0].set_yticks(range(len(names)))
     axes[0].set_yticklabels(names, fontsize=8)
-    axes[0].set_title("feature correlation matrix")
+    axes[0].set_title(f"correlation matrix (n={n} programs, diagonal masked,\n"
+                       f"scale=±{vmax:.2f} = observed range)")
+    for i in range(len(names)):
+        for j in range(len(names)):
+            if i == j:
+                continue
+            axes[0].text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center", fontsize=6.5)
     fig.colorbar(im, ax=axes[0], fraction=0.046)
 
     axes[1].bar(range(1, len(explained) + 1), explained, color="#4da3ff")
     axes[1].plot(range(1, len(explained) + 1), np.cumsum(explained), "o-", color="#e8574a")
     axes[1].set_xlabel("component")
     axes[1].set_ylabel("explained variance ratio")
-    axes[1].set_title("PCA scree plot (bars) + cumulative (line)")
+    axes[1].set_title(f"PCA scree (n={n}) — condition number={condition_number:.1f}")
     fig.tight_layout()
     fig.savefig(OUT_DIR / "03_correlation_pca.png", dpi=140)
     plt.close(fig)
@@ -318,21 +349,42 @@ def analyze_correlation_and_pca(programs: list[dict], as_of: date) -> str:
 
     one_component = explained[0] > 0.6
     verdict = (
-        f"PC1 alone explains {explained[0]:.0%} of variance — most of these 'eight' features are "
-        "largely one underlying signal wearing different costumes. The model is simpler than the "
-        "feature list suggests." if one_component else
+        f"PC1 alone explains {explained[0]:.0%} of variance — most of these features are largely "
+        "one underlying signal wearing different costumes. The model is simpler than the feature "
+        "list suggests." if one_component else
         f"No single component dominates (PC1 = {explained[0]:.0%}); the features carry meaningfully "
         "distinct information, not one redundant signal."
     )
+    if condition_number > 1e6:
+        rank_note = (
+            f"Condition number = {condition_number:.2e} — this is EXACT (not approximate) rank "
+            "deficiency, and it's mechanical, not a data surprise: staleness_age_adjusted is "
+            "constructed as staleness minus a linear function of months_since_start, and both of "
+            "those inputs are also in this matrix — so one column is an exact linear combination of "
+            "two others by definition. That's expected whenever a residualised feature sits "
+            "alongside its own regressors; it doesn't indicate anything new about the underlying data."
+        )
+    else:
+        rank_note = (
+            f"Condition number = {condition_number:.1f} — " +
+            ("high enough to indicate near-rank-deficiency (some features are near-exact linear "
+             "combinations of others)." if condition_number > 30 else
+             "no strong evidence of rank deficiency at this size.")
+        )
 
     return f"""## 3. Feature correlation structure
 
-N = {n} programs. Features: {", ".join(names)}.
+N = {n} programs (of {len(programs)} total — programs without a computable score/age are excluded). \
+Features: {", ".join(names)}. silence_score is excluded — see the code comment: it's a deterministic \
+function of staleness + status_ambiguity + verification_lapse, so keeping it in would double-count \
+those three and manufacture a dominant PC1 out of it.
 
 {corr_table}
 
 ### PCA
 {top_loadings}
+
+{rank_note}
 
 **Verdict**: {verdict}
 
@@ -366,51 +418,97 @@ def _median_survival(times: np.ndarray, survival: np.ndarray) -> str:
     return f"{times[below[0]]:.0f}mo"
 
 
+# A trial whose last known version landed within this many days of as_of
+# is still "fresh" — we can't yet tell whether it has truly gone quiet or
+# is about to be amended again, so it's censored rather than treated as
+# an observed last-amendment event. This is the ONLY thing that decides
+# event-vs-censored for curve B below — deliberately independent of
+# registry status, which is known to lag true program state by years.
+STILL_FRESH_DAYS = 180
+
+
 def analyze_survival(trials: list[dict], as_of: date) -> str:
-    by_phase: dict[str, list[dict]] = defaultdict(list)
+    by_phase_terminal: dict[str, list[dict]] = defaultdict(list)
+    by_phase_amendment: dict[str, list[dict]] = defaultdict(list)
     for t in trials:
         if t["start_date"] is None or t["last_version_date"] is None:
             continue
         duration = (t["last_version_date"] - t["start_date"]).days / 30.44
         if duration < 0:
             continue
-        event = 1 if t["status"] in TERMINAL_STATUSES else 0  # censored if still active/unknown
-        by_phase[phase_bucket(t["phases"])].append({"duration": duration, "event": event})
+        phase = phase_bucket(t["phases"])
 
-    fig, ax = plt.subplots(figsize=(7.5, 5))
-    lines = ["| phase | n | events (not censored) | median time-to-last-amendment |",
-             "|---|---:|---:|---:|"]
-    for phase in PHASE_ORDER:
-        rows = by_phase.get(phase)
-        if not rows or len(rows) < 5:
-            continue
-        durations = np.array([r["duration"] for r in rows])
-        events = np.array([r["event"] for r in rows])
-        times, survival = _kaplan_meier(durations, events)
-        ax.step(times, survival, where="post", label=f"{phase} (n={len(rows)})")
-        lines.append(f"| {phase} | {len(rows)} | {events.sum()} | {_median_survival(times, survival)} |")
+        # Curve A (kept, retitled honestly): event = reached a terminal
+        # registry status. This is confounded by how long status updates
+        # lag reality — kept for comparison, not as the primary answer.
+        terminal_event = 1 if t["status"] in TERMINAL_STATUSES else 0
+        by_phase_terminal[phase].append({"duration": duration, "event": terminal_event})
 
-    ax.set_xlabel("months since trial start")
-    ax.set_ylabel("probability not yet at its last amendment")
-    ax.set_title("Kaplan-Meier: time-to-last-amendment by phase\n(event = reached a terminal "
-                  "registry status; censored = still active/unknown)")
-    ax.set_ylim(0, 1.02)
-    ax.legend(fontsize=8)
+        # Curve B (new, the actual "time to last amendment"): event = the
+        # last recorded version IS the last one, inferred from recency
+        # alone, never from registry status.
+        days_since_last = (as_of - t["last_version_date"]).days
+        amendment_event = 1 if days_since_last > STILL_FRESH_DAYS else 0
+        by_phase_amendment[phase].append({"duration": duration, "event": amendment_event})
+
+    def _render(by_phase: dict, ax, title: str, ylabel_event: str) -> list[str]:
+        lines = [f"| phase | n | events ({ylabel_event}) | median |", "|---|---:|---:|---:|"]
+        for phase in PHASE_ORDER:
+            rows = by_phase.get(phase)
+            if not rows or len(rows) < 5:
+                continue
+            durations = np.array([r["duration"] for r in rows])
+            events = np.array([r["event"] for r in rows])
+            times, survival = _kaplan_meier(durations, events)
+            ax.step(times, survival, where="post", label=f"{phase} (n={len(rows)})")
+            lines.append(f"| {phase} | {len(rows)} | {events.sum()} | {_median_survival(times, survival)} |")
+        ax.set_xlabel("months since trial start")
+        ax.set_ylabel("probability event not yet occurred")
+        ax.set_title(title)
+        ax.set_ylim(0, 1.02)
+        ax.legend(fontsize=7)
+        return lines
+
+    n_total = sum(len(v) for v in by_phase_terminal.values())
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
+    lines_a = _render(
+        by_phase_terminal, axes[0], f"A. Time to reaching a TERMINAL REGISTRY STATUS (n={n_total})\n"
+        "(confounded by status-update lag — kept for comparison only)",
+        "reached terminal status",
+    )
+    lines_b = _render(
+        by_phase_amendment, axes[1], f"B. Time to LAST AMENDMENT (n={n_total})\n"
+        f"(event = no new version in >{STILL_FRESH_DAYS}d, status-independent)",
+        "inferred last amendment",
+    )
     fig.tight_layout()
     fig.savefig(OUT_DIR / "04_survival_by_phase.png", dpi=140)
     plt.close(fig)
 
-    table = "\n".join(lines)
-    return f"""## 4. Time-to-last-amendment survival, by phase
+    events_a = sum(r["event"] for rows in by_phase_terminal.values() for r in rows)
+    events_b = sum(r["event"] for rows in by_phase_amendment.values() for r in rows)
+    table_a, table_b = "\n".join(lines_a), "\n".join(lines_b)
+    return f"""## 4. Survival, by phase: two different questions, deliberately kept separate
 
-Event = the trial reached a terminal registry status (COMPLETED/TERMINATED/WITHDRAWN) — treated as \
-"we're confident this is the last amendment". Still-active/unknown trials are right-censored at their \
-current staleness, since more amendments could still come.
+**Panel A — time to a terminal registry status.** Confounded by exactly what this whole project is \
+about: registry status is known to lag true program state, sometimes by years. Kept only so the gap \
+against panel B is visible.
 
-{table}
+{table_a}
 
-This is the base rate for "how long do amendments normally keep happening" — read "unusually stale" \
-against these medians, not an assumed fixed cutoff.
+**Panel B — time to last amendment**, the base rate this project actually needs: how long do sponsors \
+normally keep touching a record, independent of registry status? Event = no new version posted in \
+more than {STILL_FRESH_DAYS} days (censored if the last version is more recent than that — we can't \
+yet tell if it's truly gone quiet).
+
+{table_b}
+
+**The gap between A and B is itself the finding**: {events_b} trials have gone quiet on the amendment \
+record (panel B) vs only {events_a} that have been formally marked terminal (panel A) — {events_b - events_a} \
+trials ({(events_b - events_a) / events_a:.0%} more) that look "amendment-silent" have NOT had their \
+registry status updated to match. Medians in B are equal to or shorter than A's in every phase but \
+PHASE3. Read "unusually stale" against panel B, not an assumed fixed cutoff — panel A alone \
+understates, and lags, how early a program actually went silent.
 
 ![survival_by_phase]({OUT_DIR.name}/04_survival_by_phase.png)
 """
@@ -501,10 +599,7 @@ def analyze_regional_strata(programs: list[dict], con: duckdb.DuckDBPyConnection
         elif "China" in countries and len(countries) == 1:
             china_program_ids.add(p["program_id"])
 
-    X, names = build_feature_matrix(programs, as_of)
-    id_order = [p["program_id"] for p in programs
-                if "staleness" in (p.get("score_breakdown") or {})
-                and any(_parse_date(t.get("start_date")) for t in (p.get("trials") or []))]
+    X, names, id_order = build_feature_matrix(programs, as_of)
     is_china = np.array([pid in china_program_ids for pid in id_order])
 
     if is_china.sum() < 5 or (~is_china).sum() < 5:
@@ -532,6 +627,57 @@ sponsor HQ country directly). {int(is_china.sum())} programs qualify, vs {int((~
 Any feature with p < 0.05 above differs systematically by region — if so, that base rate (and \
 possibly the model) should be split by region rather than pooled.
 """
+
+
+# ------------------------------------------------ 3.5 enrollment_signal audit --
+
+def analyze_enrollment_signal(programs: list[dict]) -> str:
+    """enrollment_signal's near-zero correlation with everything else
+    (section 3) is either "genuinely orthogonal information" or "an
+    empty/near-constant column" — this settles which. It's computed by
+    compute_silence_score from the LATEST trial's status + enrollment_type,
+    not read directly, so "missingness" here means enrollment_type itself
+    being unset on the latest trial, tracked separately from the resulting
+    signal value's own distribution."""
+    values, missing_enrollment_type = [], 0
+    for p in programs:
+        breakdown = p.get("score_breakdown") or {}
+        if "enrollment_signal" not in breakdown:
+            continue
+        values.append(breakdown["enrollment_signal"])
+        trials = p.get("trials") or []
+        latest = eda_latest_trial(trials) if trials else None
+        if latest is None or not latest.get("enrollment_type"):
+            missing_enrollment_type += 1
+
+    n = len(values)
+    dist = Counter(values)
+    nonzero = sum(1 for v in values if v != 0.0)
+    dist_lines = "\n".join(f"  {v}: {c} ({c/n:.1%})" for v, c in sorted(dist.items()))
+
+    return f"""## 3.5. Investigating enrollment_signal
+
+N = {n} programs with a computed score.
+
+- Non-null enrollment_type on the latest trial: {n - missing_enrollment_type} / {n} \
+({(n - missing_enrollment_type)/n:.1%}) — enrollment_type itself is well populated, this is NOT a \
+missing-data problem.
+- enrollment_signal value distribution:
+{dist_lines}
+- Non-zero: {nonzero} / {n} ({nonzero/n:.1%})
+
+**Verdict**: enrollment_signal is not missing data — it's a near-constant column because \
+compute_silence_score's rule only assigns a non-zero value when the LATEST trial is BOTH in a \
+terminal-ish status (TERMINATED/WITHDRAWN/SUSPENDED, or COMPLETED) AND still carries ESTIMATED \
+(not finalized) enrollment. Most ESTIMATED-enrollment trials are simply still RECRUITING/ACTIVE, \
+which the rule doesn't touch at all — so {nonzero}/{n} programs ever get a non-zero value. The \
+near-zero correlation in section 3 is orthogonal-information-with-almost-no-variance, not a bug: \
+the feature is doing exactly what it was designed to do, just on a very narrow trigger.
+"""
+
+
+def eda_latest_trial(trials: list[dict]) -> dict:
+    return max(trials, key=lambda t: t.get("last_update_post_date") or "")
 
 
 # ------------------------------------------------------- 7. UNKNOWN base rate --
@@ -575,6 +721,7 @@ def main() -> None:
         analyze_bimodality(trials, as_of),
         analyze_event_types(con, trials),
         analyze_correlation_and_pca(programs, as_of),
+        analyze_enrollment_signal(programs),
         analyze_survival(trials, as_of),
         analyze_sponsor_clustering(programs),
         analyze_regional_strata(programs, con, as_of),

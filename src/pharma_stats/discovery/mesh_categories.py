@@ -209,3 +209,17 @@ AMBIGUOUS_OVERRIDE_PHRASES: list[str] = [
     "any tumor type",
     "any solid tumor type",
 ]
+
+# Free-text fallback ONLY for trials that still have no MeSH data after
+# the current-state fetch (see docs/decisions/0001-current-state-fetch-scope.md
+# and labelling/trial_scope.text_hint_category). Used exclusively to SORT
+# the review queue — never to decide scope, and never to auto-exclude.
+# "all" is deliberately omitted (collides with "All Solid Tumors" basket-
+# trial phrasing far too easily); "leukemia" is spelled out often enough
+# in practice to cover the acronym case anyway.
+HEME_TEXT_HINT_KEYWORDS: list[str] = [
+    "leukemia", "leukaemia", "lymphoma", "myeloma", "myelodysplastic",
+    "myelofibrosis", "hodgkin", "dlbcl", "nhl", "cll", "aml", "cml", "mds",
+    "hematologic", "haematologic", "hematological", "haematological",
+    "blood cancer",
+]

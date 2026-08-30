@@ -22,14 +22,27 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from pathlib import Path
 from typing import Optional
 
 from pharma_stats.config import DATA_DIR
-from pharma_stats.discovery.mesh_categories import AMBIGUOUS_OVERRIDE_PHRASES, category_for
+from pharma_stats.discovery.mesh_categories import (
+    AMBIGUOUS_OVERRIDE_PHRASES, HEME_TEXT_HINT_KEYWORDS, category_for,
+)
+
+_HEME_TEXT_HINT_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in HEME_TEXT_HINT_KEYWORDS) + r")\b", re.IGNORECASE,
+)
 
 AGREEMENT_THRESHOLD = 0.95
 VALIDATION_SAMPLE_SIZE = 30
+
+# Below this, a heme_only/spans-both count is coverage noise, not a real
+# result — see docs/decisions/0001-current-state-fetch-scope.md. Single
+# source of truth for audit/universe.py's gate and
+# scripts/apply_auto_scope_exclusions.py's own refusal to run below it.
+MESH_COVERAGE_THRESHOLD = 0.90
 
 # Program ids held out from auto-exclusion so their human review can be
 # compared blind against the classifier's prediction (see
@@ -49,6 +62,29 @@ def save_validation_sample(sample: list[dict], path: Optional[Path] = None) -> N
     path = path or VALIDATION_SAMPLE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(sample, indent=2, sort_keys=True))
+
+
+def has_mesh_data(meshes: list[dict], ancestors: list[dict]) -> bool:
+    """Whether this trial has ANY conditionBrowseModule signal at all —
+    the coverage denominator for the MeSH-coverage gate (audit/universe.py)
+    and the trigger for the text_hint_category fallback below. Distinct
+    from classify_trial's "ambiguous", which also fires when MeSH IS
+    present but isn't in the dictionary yet — that's a dictionary gap, not
+    a coverage gap, and the two must not be conflated when reporting
+    coverage."""
+    return bool(meshes) or bool(ancestors)
+
+
+def text_hint_category(conditions: list[str]) -> Optional[str]:
+    """Free-text fallback for trials that still have no MeSH data after
+    the current-state fetch (docs/decisions/0001-current-state-fetch-scope.md).
+    Returns "heme" or None — NEVER "solid" or anything else, and NEVER
+    consulted by classify_trial/classify_asset/auto_scope_decision. This
+    is sort-queue-priority signal only: good enough to triage faster, not
+    good enough to decide scope. A trial this flags stays "ambiguous" in
+    trial_scope and can never be auto-excluded."""
+    text = " | ".join(conditions or [])
+    return "heme" if _HEME_TEXT_HINT_RE.search(text) else None
 
 
 def classify_trial(
@@ -111,6 +147,22 @@ def is_non_industry_sponsor(sponsors_over_time: list[dict]) -> bool:
     asset can have had more than one sponsor class over time; any
     non-INDUSTRY sponsor on file is enough to surface it for review."""
     return any((s.get("class") or "").upper() != "INDUSTRY" for s in (sponsors_over_time or []))
+
+
+def mesh_coverage(programs: list[dict]) -> dict:
+    """Fraction of in-universe trials with any conditionBrowseModule data
+    at all (trial_has_mesh, from provisional_programs.build_program) —
+    the single source of truth for both audit/universe.py's coverage gate
+    and scripts/apply_auto_scope_exclusions.py's own refusal to run below
+    MESH_COVERAGE_THRESHOLD. Distinct from a trial classifying "ambiguous"
+    for a dictionary gap instead of a coverage gap — see has_mesh_data."""
+    total = covered = 0
+    for p in programs:
+        for has_mesh in (p.get("trial_has_mesh") or {}).values():
+            total += 1
+            covered += int(bool(has_mesh))
+    rate = (covered / total) if total else 0.0
+    return {"covered": covered, "total": total, "coverage_rate": rate}
 
 
 def auto_scope_decision(asset_category: str) -> Optional[dict]:

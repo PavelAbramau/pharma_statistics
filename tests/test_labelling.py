@@ -678,6 +678,33 @@ def test_is_non_oncology_and_non_industry_hints():
     ) is True
 
 
+def test_has_mesh_data():
+    assert trial_scope.has_mesh_data([{"id": "D008228", "term": "x"}], []) is True
+    assert trial_scope.has_mesh_data([], [{"id": "D009369", "term": "x"}]) is True
+    assert trial_scope.has_mesh_data([], []) is False
+
+
+def test_text_hint_category_only_ever_returns_heme_or_none():
+    assert trial_scope.text_hint_category(["Acute Myeloid Leukemia"]) == "heme"
+    assert trial_scope.text_hint_category(["Diffuse Large B-Cell Lymphoma"]) == "heme"
+    assert trial_scope.text_hint_category(["Non-Small Cell Lung Cancer"]) is None
+    assert trial_scope.text_hint_category(["All Solid Tumors"]) is None  # not the ALL acronym
+    assert trial_scope.text_hint_category([]) is None
+
+
+def test_mesh_coverage_aggregates_across_programs():
+    programs = [
+        {"trial_has_mesh": {"NCT1": True, "NCT2": False}},
+        {"trial_has_mesh": {"NCT3": True}},
+    ]
+    result = trial_scope.mesh_coverage(programs)
+    assert result == {"covered": 2, "total": 3, "coverage_rate": pytest.approx(2 / 3)}
+
+
+def test_mesh_coverage_empty_universe():
+    assert trial_scope.mesh_coverage([]) == {"covered": 0, "total": 0, "coverage_rate": 0.0}
+
+
 def test_draw_validation_sample_keeps_prior_reservations_and_tops_up():
     sample = trial_scope.draw_validation_sample(
         candidate_ids=[f"p{i}" for i in range(50)], already_reserved=set(), target_size=5, seed=0,

@@ -77,61 +77,74 @@ class DecomposedAnswers:
     successor_asset: SuccessorAssetAnswer
 
 
-def _abstain(reason: str) -> dict:
+def _abstain(reason: str, rule_path: str) -> dict:
     return {
         "status": None, "kill_reason": None, "public_confirmation_date": None,
         "never_publicly_confirmed": False, "abstain": True, "abstain_reason": reason,
+        "rule_path": rule_path,
     }
 
 
 def apply_deterministic_rules(answers: DecomposedAnswers) -> dict:
     """Pure function: decomposed answers -> a candidate silver label
     ({"status", "kill_reason", "public_confirmation_date",
-    "never_publicly_confirmed", "abstain", "abstain_reason"}). Any
-    NOT_DETERMINABLE answer that a rule actually needs forces abstention —
-    this never guesses past a gap in the evidence, and self-consistency
-    disagreement (silver/sampling.py) is a second, independent abstention
-    trigger layered on top of this one."""
+    "never_publicly_confirmed", "abstain", "abstain_reason", "rule_path"}).
+    rule_path names exactly which branch fired — part of "the deterministic
+    rule path taken" a silver record must log. Any NOT_DETERMINABLE answer
+    that a rule actually needs forces abstention — this never guesses past
+    a gap in the evidence, and self-consistency disagreement
+    (silver/sampling.py) is a second, independent abstention trigger
+    layered on top of this one."""
     statement = answers.discontinuation_statement
     trial_since = answers.trial_initiated_since.value
     successor = answers.successor_asset
 
     if statement.exists == NOT_DETERMINABLE or trial_since == NOT_DETERMINABLE:
-        return _abstain("core evidence (discontinuation statement or new-trial check) not determinable")
+        return _abstain(
+            "core evidence (discontinuation statement or new-trial check) not determinable",
+            "abstain:core_evidence_not_determinable",
+        )
 
     if statement.exists is True:
         reason = answers.stop_reason.category
         if reason == NOT_DETERMINABLE:
-            return _abstain("discontinuation confirmed but stop reason not determinable")
+            return _abstain(
+                "discontinuation confirmed but stop reason not determinable",
+                "abstain:stop_reason_not_determinable",
+            )
         return {
             "status": "dead_confirmed",
             "kill_reason": _KILL_REASON_BY_STOP_CATEGORY.get(reason, "unknown_silent"),
             "public_confirmation_date": statement.statement_date,
             "never_publicly_confirmed": False,
             "abstain": False,
+            "rule_path": f"dead_confirmed:{reason}",
         }
 
     # statement.exists is False from here — no public discontinuation on file
     if successor.exists == NOT_DETERMINABLE and trial_since is False:
-        return _abstain("no new trial and no discontinuation statement, but successor-asset check "
-                         "not determinable — can't tell superseded from dormant")
+        return _abstain(
+            "no new trial and no discontinuation statement, but successor-asset check "
+            "not determinable — can't tell superseded from dormant",
+            "abstain:successor_not_determinable",
+        )
 
     if trial_since is False and successor.exists is True:
         return {
             "status": "superseded", "kill_reason": None, "public_confirmation_date": None,
-            "never_publicly_confirmed": False, "abstain": False,
+            "never_publicly_confirmed": False, "abstain": False, "rule_path": "superseded",
         }
 
     if trial_since is False and successor.exists is False:
         return {
             "status": "dormant_suspected", "kill_reason": None, "public_confirmation_date": None,
-            "never_publicly_confirmed": False, "abstain": False,
+            "never_publicly_confirmed": False, "abstain": False, "rule_path": "dormant_suspected",
         }
 
     if trial_since is True:
         return {
             "status": "active", "kill_reason": None, "public_confirmation_date": None,
-            "never_publicly_confirmed": False, "abstain": False,
+            "never_publicly_confirmed": False, "abstain": False, "rule_path": "active",
         }
 
-    return _abstain("answers don't cleanly resolve under the deterministic rule set")
+    return _abstain("answers don't cleanly resolve under the deterministic rule set", "abstain:unresolved")

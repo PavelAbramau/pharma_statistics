@@ -5,11 +5,10 @@ non-zero temperature, not from a model's own stated confidence —
 disagreement across samples IS the abstention trigger, not a fallback for
 when it happens to look uncertain.
 
-STUB: sample_answers needs an actual model-invocation mechanism, which
-hasn't been chosen yet (scaffolding first, per the user's own call).
-majority_vote and should_abstain are pure aggregation over already-drawn
-samples and are fully implemented — they don't care how the samples were
-produced, so they're ready for whatever sample_answers becomes.
+Wired to the Anthropic API (silver/model_client.py) via silver/prompts.py,
+which builds question_fn as a closure over one fully-formed prompt at a
+fixed temperature/model — sample_answers itself stays model-agnostic,
+calling question_fn k times and nothing else.
 """
 from __future__ import annotations
 
@@ -42,14 +41,11 @@ def should_abstain(samples: list[T]) -> bool:
 
 
 def sample_answers(question_fn: Callable[[], T], k: int = DEFAULT_K, temperature: float = 0.7) -> list[T]:
-    """Draw k independent samples of one decomposed question (see
-    silver/questions.py) at non-zero temperature.
-
-    NOT IMPLEMENTED: needs a model-invocation mechanism to be chosen
-    first — see silver/__init__.py and the project decision log. Once
-    chosen, this is the only function that needs to change; everything
-    else in this module and silver/eval.py already works against its
-    output shape (a list of T, one per sample)."""
-    raise NotImplementedError(
-        "sample_answers needs a model-invocation mechanism to be chosen before it can run"
-    )
+    """Draw k independent samples of one decomposed question by calling
+    question_fn k times. `temperature` is accepted for interface/logging
+    parity with the design (it's documented as part of the sampling
+    contract) but not applied here — question_fn (built by
+    silver/prompts.py) is a closure that already carries its own bound
+    prompt/temperature/model, so the actual API call and its temperature
+    live there, not in this generic aggregation loop."""
+    return [question_fn() for _ in range(k)]

@@ -484,3 +484,65 @@ def test_heme_only_auto_exclusion_agreement_fails_below_threshold(tmp_path, monk
     check = checks[0]
     assert check.level == "FAIL"
     assert "15 / 20" in check.actual
+
+
+def test_mesh_coverage_gate_warns_below_threshold(monkeypatch):
+    programs = [
+        {"trial_has_mesh": {"NCT1": True, "NCT2": False}},
+        {"trial_has_mesh": {"NCT3": False, "NCT4": False}},
+    ]
+    monkeypatch.setattr(pp, "load_materialized", lambda: programs)
+    checks = universe._mesh_coverage_gate()
+    check = checks[0]
+    assert check.level == "WARN"
+    assert "1 / 4" in check.actual
+
+
+def test_mesh_coverage_gate_passes_above_threshold(monkeypatch):
+    programs = [{"trial_has_mesh": {f"NCT{i}": True for i in range(9)} | {"NCT9": False}}]
+    monkeypatch.setattr(pp, "load_materialized", lambda: programs)
+    checks = universe._mesh_coverage_gate()
+    assert checks[0].level == "PASS"
+    assert "9 / 10" in checks[0].actual
+
+
+def test_mesh_coverage_gate_handles_unmaterialized(monkeypatch):
+    monkeypatch.setattr(pp, "load_materialized", lambda: [])
+    checks = universe._mesh_coverage_gate()
+    assert checks[0].level == "INFO"
+    assert "not materialized" in checks[0].actual
+
+
+def test_current_state_read_boundary_fails_on_unwhitelisted_call(monkeypatch, tmp_path):
+    bad_module = tmp_path / "bad_module.py"
+    bad_module.write_text(
+        "def _condition_browse_data():\n"
+        "    return snap.latest('ctgov', 'x')\n"
+        "\n"
+        "def compute_silence_score():\n"
+        "    return snap.latest('ctgov', 'y')\n"
+    )
+    monkeypatch.setattr(universe.inspect, "getsourcefile", lambda mod: str(bad_module))
+    monkeypatch.setattr(pp, "CURRENT_STATE_READ_WHITELIST", {"_condition_browse_data"})
+
+    checks = universe._current_state_read_boundary()
+    check = checks[0]
+    assert check.level == "FAIL"
+    assert "compute_silence_score" in check.detail
+    assert "_condition_browse_data" not in check.detail
+
+
+def test_current_state_read_boundary_passes_when_only_whitelisted_calls(monkeypatch, tmp_path):
+    clean_module = tmp_path / "clean_module.py"
+    clean_module.write_text(
+        "def _condition_browse_data():\n"
+        "    return snap.latest('ctgov', 'x')\n"
+        "\n"
+        "def compute_silence_score():\n"
+        "    return 42\n"
+    )
+    monkeypatch.setattr("inspect.getsourcefile", lambda mod: str(clean_module))
+    monkeypatch.setattr(pp, "CURRENT_STATE_READ_WHITELIST", {"_condition_browse_data"})
+
+    checks = universe._current_state_read_boundary()
+    assert checks[0].level == "PASS"

@@ -97,9 +97,11 @@ CREATE TABLE IF NOT EXISTS provisional_programs (
     trial_scope                           JSON,
     scope_category                         VARCHAR,
     spans_heme_and_solid                    BOOLEAN,
-    non_oncology_hint                        BOOLEAN,
-    non_industry_sponsor_hint                 BOOLEAN,
-    built_at                                   TIMESTAMP
+    trial_has_mesh                           JSON,
+    trial_text_hint                           JSON,
+    non_oncology_hint                          BOOLEAN,
+    non_industry_sponsor_hint                   BOOLEAN,
+    built_at                                     TIMESTAMP
 )
 """
 
@@ -214,6 +216,19 @@ def _best_trial_snapshot(
     return None
 
 
+# Functions in THIS file permitted to read a current-state-only snapshot
+# (snapshot.latest/get_as_of called for something other than the
+# versioned-history path _best_trial_snapshot resolves). See
+# docs/decisions/0001-current-state-fetch-scope.md: current-state reads
+# are allowed ONLY for static universe-membership properties (disease
+# category, sponsor class, start date), never for a silence/model
+# feature. audit/universe.py's _current_state_read_boundary check
+# statically enforces that every other function in this file stays off
+# snap.latest/get_as_of entirely. Widening this list is a deliberate,
+# reviewable decision — update the doc above when you do.
+CURRENT_STATE_READ_WHITELIST = {"_condition_browse_data"}
+
+
 def _condition_browse_data(nct_id: str) -> tuple[list[dict], list[dict]]:
     """(meshes, ancestors) from CT.gov's conditionBrowseModule. This lives
     under derivedSection on a "current state" fetch (``snap.latest("ctgov",
@@ -222,7 +237,9 @@ def _condition_browse_data(nct_id: str) -> tuple[list[dict], list[dict]]:
     derivedSection at all, so this is deliberately independent of that
     lookup. Most trials in this project have never had a current-state
     fetch, so ([], []) — "no MeSH data" — is the common case; trial_scope
-    treats that as "ambiguous", never as a reason to guess from text."""
+    treats that as "ambiguous", never as a reason to guess from text.
+    Permitted current-state read — see CURRENT_STATE_READ_WHITELIST above
+    and docs/decisions/0001-current-state-fetch-scope.md."""
     s = snap.latest("ctgov", nct_id)
     if s is None:
         return [], []
@@ -510,6 +527,8 @@ def build_program(
 
     trials: list[TrialSummary] = []
     trial_scope: dict[str, str] = {}
+    trial_has_mesh: dict[str, bool] = {}
+    trial_text_hint: dict[str, Optional[str]] = {}
     for nct_id in included_ids:
         t = summarize_trial(nct_id, con)
         if t is not None:
@@ -518,9 +537,13 @@ def build_program(
         # snapshot at all — a trial we know nothing about must classify
         # ambiguous, not be silently absent from the scope rollup
         meshes, ancestors = _condition_browse_data(nct_id)
-        trial_scope[nct_id] = ts.classify_trial(
-            meshes, ancestors, t.conditions if t is not None else [],
-        )
+        conditions = t.conditions if t is not None else []
+        trial_scope[nct_id] = ts.classify_trial(meshes, ancestors, conditions)
+        has_mesh = ts.has_mesh_data(meshes, ancestors)
+        trial_has_mesh[nct_id] = has_mesh
+        # text fallback ONLY when MeSH is absent — sort-queue hint, never
+        # a scope decision (see trial_scope.text_hint_category)
+        trial_text_hint[nct_id] = None if has_mesh else ts.text_hint_category(conditions)
 
     # computed over ALL included trials, not just ones summarize_trial
     # could resolve — a trial with no snapshot at all is exactly the
@@ -583,6 +606,10 @@ def build_program(
         "trial_scope": trial_scope,
         "scope_category": scope_category,
         "spans_heme_and_solid": ts.spans_heme_and_solid(scope_values),
+        # coverage + fallback bookkeeping — see audit/universe.py's MeSH
+        # coverage gate and trial_scope.text_hint_category
+        "trial_has_mesh": trial_has_mesh,
+        "trial_text_hint": trial_text_hint,
         "non_oncology_hint": ts.is_non_oncology_asset(scope_values),
         "non_industry_sponsor_hint": ts.is_non_industry_sponsor(candidate_row["sponsors_over_time"]),
         "history_coverage": history_coverage,
@@ -690,8 +717,9 @@ def materialize(warehouse_db=None, as_of: Optional[date] = None) -> int:
                  latest_nct_id, trials, timeline, review_status,
                  discovery_strategy, match_strength, matched_term,
                  trial_scope, scope_category, spans_heme_and_solid,
+                 trial_has_mesh, trial_text_hint,
                  non_oncology_hint, non_industry_sponsor_hint, built_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -706,6 +734,7 @@ def materialize(warehouse_db=None, as_of: Optional[date] = None) -> int:
                     p["review_status"],
                     p["discovery_strategy"], p["match_strength"], p["matched_term"],
                     json.dumps(p["trial_scope"]), p["scope_category"], p["spans_heme_and_solid"],
+                    json.dumps(p["trial_has_mesh"]), json.dumps(p["trial_text_hint"]),
                     p["non_oncology_hint"], p["non_industry_sponsor_hint"],
                     p["built_at"],
                 )
@@ -733,7 +762,7 @@ def load_materialized(warehouse_db=None) -> list[dict]:
                 "SELECT column_name FROM information_schema.columns WHERE table_name = 'provisional_programs'"
             ).fetchall()
         }
-        if "scope_category" not in table_cols:
+        if "trial_has_mesh" not in table_cols:
             # built by an older version of this module, before that column
             # existed — treat as unmaterialized rather than hard-crash; the
             # caller's usual "not materialized yet" path rebuilds it fresh
@@ -747,6 +776,7 @@ def load_materialized(warehouse_db=None) -> list[dict]:
                    latest_nct_id, trials, timeline, review_status,
                    discovery_strategy, match_strength, matched_term,
                    trial_scope, scope_category, spans_heme_and_solid,
+                   trial_has_mesh, trial_text_hint,
                    non_oncology_hint, non_industry_sponsor_hint, built_at
             FROM provisional_programs ORDER BY program_id
             """
@@ -761,13 +791,15 @@ def load_materialized(warehouse_db=None) -> list[dict]:
         "latest_nct_id", "trials", "timeline", "review_status",
         "discovery_strategy", "match_strength", "matched_term",
         "trial_scope", "scope_category", "spans_heme_and_solid",
+        "trial_has_mesh", "trial_text_hint",
         "non_oncology_hint", "non_industry_sponsor_hint", "built_at",
     ]
     out = []
     for r in rows:
         d = dict(zip(cols, r))
         for k in ("sponsors_over_time", "score_breakdown", "trials", "timeline",
-                   "excluded_shared_trials", "trial_coverage", "trial_scope"):
+                   "excluded_shared_trials", "trial_coverage", "trial_scope",
+                   "trial_has_mesh", "trial_text_hint"):
             if isinstance(d[k], str):
                 d[k] = json.loads(d[k])
         out.append(d)
