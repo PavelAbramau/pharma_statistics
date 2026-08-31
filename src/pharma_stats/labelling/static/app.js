@@ -258,7 +258,8 @@ function buildChoiceButtons() {
   ).join("");
 
   const reasonKeys = "abcd".split("");
-  $("scopeReasonChoices").innerHTML = state.vocab.scope_out_reasons.map((r, i) =>
+  const gate2Reasons = state.vocab.gate2_scope_out_reasons || state.vocab.scope_out_reasons.filter((r) => r !== "not_an_adc");
+  $("scopeReasonChoices").innerHTML = gate2Reasons.map((r, i) =>
     `<button class="choice" data-kind="scope_reason" data-value="${r}"><kbd>${reasonKeys[i]}</kbd>${r}</button>`
   ).join("");
 
@@ -346,6 +347,10 @@ function chooseIsAdc(value) {
       $("scopeReasonField").style.display = "block";
     }
   } else {
+    if (value === "no") {
+      setField("in_scope", "no");
+      setField("scope_reason", "not_an_adc");
+    }
     submitLabel(1);
   }
 }

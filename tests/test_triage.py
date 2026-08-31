@@ -387,6 +387,112 @@ def test_check_gate_refuses_when_not_enough_reviewed_yet():
     assert "10/80" in reason
 
 
+# -------------------------------------------------------------------- pool --
+
+def test_select_candidate_pool_excludes_any_reviewed_gate(tmp_path, monkeypatch):
+    from pharma_stats.triage import pool as tpool
+
+    programs = [
+        {"program_id": "p1", "proposed_name": "A"},
+        {"program_id": "p2", "proposed_name": "B"},
+        {"program_id": "p3", "proposed_name": "C"},
+    ]
+    gold_records = [
+        {"action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "no",
+         "timestamp": "2026-01-01", "is_repeat_probe": False},
+        {"action": "label", "program_id": "p2", "gate_reached": 3, "is_adc": "yes", "in_scope": "yes",
+         "status": "active", "timestamp": "2026-01-02", "is_repeat_probe": False},
+    ]
+    pool, stats = tpool.select_candidate_pool(programs, gold_records)
+    assert {p["program_id"] for p in pool} == {"p3"}
+    assert stats["overlap_count"] == 0
+    assert stats["total_reviewed_programs"] == 2
+    assert stats["gate1_rejected_count"] == 1
+    assert stats["gate3_labelled_count"] == 1
+
+
+def test_assert_not_reviewed_raises_for_a_reviewed_program():
+    from pharma_stats.triage import pool as tpool
+
+    gold_records = [{"action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "no",
+                      "timestamp": "2026-01-01", "is_repeat_probe": False}]
+    with pytest.raises(tpool.PoolIntegrityError):
+        tpool.assert_not_reviewed("p1", gold_records)
+    tpool.assert_not_reviewed("p2", gold_records)  # not reviewed — fine
+
+
+# ---------------------------------------------------------------- staging --
+
+def test_staging_append_refuses_reviewed_program(tmp_path, monkeypatch):
+    from pharma_stats.triage import staging
+
+    gold_records = [{"action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "no",
+                      "timestamp": "2026-01-01", "is_repeat_probe": False}]
+    from pharma_stats.triage import pool as tpool
+    monkeypatch.setattr(tpool.gold_store, "load_records", lambda: gold_records)
+
+    record = staging.build_record({"program_id": "p1", "is_adc": "no"}, run_id="r1")
+    with pytest.raises(Exception):
+        staging.append_record(record, path=tmp_path / "staged.jsonl")
+
+
+def test_staging_roundtrip(tmp_path, monkeypatch):
+    from pharma_stats.triage import staging
+
+    from pharma_stats.triage import pool as tpool
+    monkeypatch.setattr(tpool.gold_store, "load_records", lambda: [])
+    path = tmp_path / "staged.jsonl"
+    record = staging.build_record(
+        {"program_id": "p1", "proposed_name": "X", "is_adc": "yes", "layer": 2}, run_id="r1",
+    )
+    staging.append_record(record, path=path)
+    loaded = staging.load_records(path=path)
+    assert len(loaded) == 1
+    assert loaded[0]["status"] == "pending"
+    assert loaded[0]["layer"] == 2
+
+
+# --------------------------------------------------------------- pipeline --
+
+def test_partition_by_text_evidence():
+    from pharma_stats.triage import pipeline as tpl
+
+    evidences = [
+        {"program_id": "p1", "text_snippets": ["some text"]},
+        {"program_id": "p2", "text_snippets": []},
+        {"program_id": "p3", "text_snippets": None},
+    ]
+    with_text, no_text = tpl.partition_by_text_evidence(evidences)
+    assert [e["program_id"] for e in with_text] == ["p1"]
+    assert [e["program_id"] for e in no_text] == ["p2", "p3"]
+
+
+def test_cap_layer3_queue_flags_overflow_never_drops():
+    from pharma_stats.triage import pipeline as tpl
+
+    candidates = [{"program_id": f"p{i}"} for i in range(200)]
+    within, overflow = tpl.cap_layer3_queue(candidates, cap=150)
+    assert len(within) == 150
+    assert len(overflow) == 50
+    assert len(within) + len(overflow) == len(candidates)  # nothing dropped
+
+
+def test_stage_manual_overflow_flags_every_candidate(tmp_path, monkeypatch):
+    from pharma_stats.triage import pipeline as tpl
+    from pharma_stats.triage import staging
+
+    from pharma_stats.triage import pool as tpool
+    monkeypatch.setattr(staging, "STAGING_PATH", tmp_path / "staged.jsonl")
+    monkeypatch.setattr(tpool.gold_store, "load_records", lambda: [])
+
+    overflow = [{"program_id": "p1", "name": "Drug A"}, {"program_id": "p2", "name": "Drug B"}]
+    n = tpl.stage_manual_overflow(overflow, run_id="r1", reason="layer3 cap exceeded")
+    assert n == 2
+    records = staging.load_records(path=tmp_path / "staged.jsonl")
+    assert all(r["manual_overflow"] for r in records)
+    assert all(r["manual_overflow_reason"] == "layer3 cap exceeded" for r in records)
+
+
 def test_recall_vs_text_gap_reports_both_rates():
     from pharma_stats.triage import validation as val
 

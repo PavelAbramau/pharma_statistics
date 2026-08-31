@@ -24,8 +24,8 @@ from typing import Any, Optional
 
 from pharma_stats.config import GOLD_DIR
 from pharma_stats.labelling.vocab import (
-    APP_VERSION, CONFIRMATION_EVIDENCE_TYPES, IN_SCOPE_VALUES, IS_ADC_VALUES, KILL_REASONS,
-    PROGRAM_STATUSES, SCOPE_OUT_REASONS, TRIAGE_LAYERS,
+    APP_VERSION, CONFIRMATION_EVIDENCE_TYPES, GATE2_SCOPE_OUT_REASONS, IN_SCOPE_VALUES,
+    IS_ADC_VALUES, KILL_REASONS, PROGRAM_STATUSES, TRIAGE_LAYERS,
 )
 
 LABELS_PATH = GOLD_DIR / "labels.jsonl"
@@ -91,9 +91,9 @@ def validate_label_payload(payload: dict) -> None:
             if payload.get("in_scope") != "no":
                 raise ValidationError("decided_by=auto gate_reached=2 records must be in_scope=no")
             scope_reason = payload.get("scope_reason")
-            if scope_reason not in SCOPE_OUT_REASONS:
+            if scope_reason not in GATE2_SCOPE_OUT_REASONS:
                 raise ValidationError(
-                    f"decided_by=auto requires scope_reason from {SCOPE_OUT_REASONS}, got {scope_reason!r}"
+                    f"decided_by=auto requires scope_reason from {GATE2_SCOPE_OUT_REASONS}, got {scope_reason!r}"
                 )
             is_adc = payload.get("is_adc")
             if is_adc is not None and is_adc not in IS_ADC_VALUES:
@@ -109,7 +109,20 @@ def validate_label_payload(payload: dict) -> None:
     if gate == 1:
         if is_adc == "yes":
             raise ValidationError("gate_reached=1 with is_adc=yes must proceed to gate 2, not save here")
-        return  # terminal triage rejection: no in_scope, no status, no coverage requirement
+        # is_adc=no always also means in_scope=no / not_an_adc — the fields
+        # are independent but a non-ADC cannot be in this project's filter.
+        # Omitted pair is allowed here; build_record fills it in. A provided
+        # pair must be the consistent one (never is_adc=no + in_scope=yes).
+        if is_adc == "no":
+            in_scope = payload.get("in_scope")
+            scope_reason = payload.get("scope_reason")
+            if in_scope is not None or scope_reason is not None:
+                if in_scope != "no" or scope_reason != "not_an_adc":
+                    raise ValidationError(
+                        "is_adc=no must carry in_scope=no and scope_reason=not_an_adc "
+                        f"(or omit both); got in_scope={in_scope!r}, scope_reason={scope_reason!r}"
+                    )
+        return  # terminal triage rejection: no status, no coverage requirement
 
     # gates 2 and 3 are only reachable when gate 1 passed
     if is_adc != "yes":
@@ -123,9 +136,9 @@ def validate_label_payload(payload: dict) -> None:
         if in_scope == "yes":
             raise ValidationError("gate_reached=2 with in_scope=yes must proceed to gate 3, not save here")
         scope_reason = payload.get("scope_reason")
-        if scope_reason not in SCOPE_OUT_REASONS:
+        if scope_reason not in GATE2_SCOPE_OUT_REASONS:
             raise ValidationError(
-                f"gate_reached=2 with in_scope=no requires scope_reason from {SCOPE_OUT_REASONS}, "
+                f"gate_reached=2 with in_scope=no requires scope_reason from {GATE2_SCOPE_OUT_REASONS}, "
                 f"got {scope_reason!r}"
             )
         return  # terminal scope rejection: no status, no coverage requirement
@@ -200,6 +213,14 @@ def validate_label_payload(payload: dict) -> None:
 
 def build_record(payload: dict, *, session_id: str, served_stratum: dict) -> dict:
     """Stamp a validated client payload into a durable JSONL record."""
+    is_adc = payload.get("is_adc")
+    in_scope = payload.get("in_scope")
+    scope_reason = payload.get("scope_reason")
+    # A molecule rejection is also a filter rejection. Persist both fields
+    # even when the client only sent is_adc=no (legacy gate-1 saves).
+    if payload.get("action") == "label" and is_adc == "no" and in_scope is None:
+        in_scope = "no"
+        scope_reason = "not_an_adc"
     return {
         "event_id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -211,9 +232,9 @@ def build_record(payload: dict, *, session_id: str, served_stratum: dict) -> dic
         "proposed_name": payload.get("proposed_name"),
         "gate_reached": payload.get("gate_reached"),
         "decided_by": payload.get("decided_by") or "human",
-        "is_adc": payload.get("is_adc"),
-        "in_scope": payload.get("in_scope"),
-        "scope_reason": payload.get("scope_reason"),
+        "is_adc": is_adc,
+        "in_scope": in_scope,
+        "scope_reason": scope_reason,
         # decided_by=auto provenance (see vocab.TRIAGE_LAYERS) — which
         # layer decided this, and exactly which rule/model/prompt version,
         # so "how was this decided" is always answerable from the record

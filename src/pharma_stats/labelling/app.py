@@ -23,8 +23,8 @@ from pharma_stats.labelling import stats as label_stats
 from pharma_stats.labelling import store
 from pharma_stats.labelling import trial_scope as ts
 from pharma_stats.labelling.vocab import (
-    APP_VERSION, CONFIDENCE_LEVELS, CONFIRMATION_EVIDENCE_TYPES, IN_SCOPE_VALUES, IS_ADC_VALUES,
-    KILL_REASONS, PROGRAM_STATUSES, SCOPE_OUT_REASONS,
+    APP_VERSION, CONFIDENCE_LEVELS, CONFIRMATION_EVIDENCE_TYPES, GATE2_SCOPE_OUT_REASONS,
+    IN_SCOPE_VALUES, IS_ADC_VALUES, KILL_REASONS, PROGRAM_STATUSES, SCOPE_OUT_REASONS,
 )
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -160,6 +160,7 @@ def vocab():
         "is_adc_values": IS_ADC_VALUES,
         "in_scope_values": IN_SCOPE_VALUES,
         "scope_out_reasons": SCOPE_OUT_REASONS,
+        "gate2_scope_out_reasons": GATE2_SCOPE_OUT_REASONS,
         "confirmation_evidence_types": CONFIRMATION_EVIDENCE_TYPES,
         "app_version": APP_VERSION,
     }

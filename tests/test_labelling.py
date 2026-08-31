@@ -406,6 +406,14 @@ def test_validate_label_payload_gate1_rejection_is_terminal():
 
     store.validate_label_payload({"action": "label", "gate_reached": 1, "is_adc": "no"})  # should not raise
     store.validate_label_payload({"action": "label", "gate_reached": 1, "is_adc": "unsure"})  # should not raise
+    store.validate_label_payload({
+        "action": "label", "gate_reached": 1, "is_adc": "no",
+        "in_scope": "no", "scope_reason": "not_an_adc",
+    })
+    with pytest.raises(store.ValidationError):
+        store.validate_label_payload({
+            "action": "label", "gate_reached": 1, "is_adc": "no", "in_scope": "yes",
+        })
 
 
 def test_validate_label_payload_gate2_requires_scope_reason_when_out_of_scope():
@@ -431,8 +439,8 @@ def test_validate_label_payload_gate2_requires_scope_reason_when_out_of_scope():
         "action": "label", "gate_reached": 2, "is_adc": "yes", "in_scope": "no", "scope_reason": "heme_only",
     })  # should not raise
 
-    # "not_an_adc" is deliberately NOT a valid scope_reason — gate 2 only
-    # exists once is_adc is already yes
+    # not_an_adc is a scope_reason only for is_adc=no (gate 1). Gate 2 is
+    # only reachable once is_adc is already yes.
     with pytest.raises(store.ValidationError):
         store.validate_label_payload({
             "action": "label", "gate_reached": 2, "is_adc": "yes", "in_scope": "no", "scope_reason": "not_an_adc",
@@ -611,6 +619,8 @@ def test_app_gate1_rejection_end_to_end(warehouse, monkeypatch, tmp_path):
     records = store.load_records(gold_path)
     assert records[-1]["gate_reached"] == 1
     assert records[-1]["is_adc"] == "no"
+    assert records[-1]["in_scope"] == "no"
+    assert records[-1]["scope_reason"] == "not_an_adc"
     assert records[-1]["discovery_strategy"] == "pattern_match"  # stamped from the served candidate
 
     session = q.load_session(session_path)
@@ -929,6 +939,80 @@ def test_has_adc_naming_suffix():
     assert migration.has_adc_naming_suffix("Trastuzumab deruxtecan") == "deruxtecan"
     assert migration.has_adc_naming_suffix("Enfortumab vedotin") == "vedotin"
     assert migration.has_adc_naming_suffix("Pembrolizumab") is None
+
+
+def test_build_record_fills_in_scope_on_is_adc_no():
+    record = store.build_record(
+        {"action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "no"},
+        session_id="s1", served_stratum={},
+    )
+    assert record["in_scope"] == "no"
+    assert record["scope_reason"] == "not_an_adc"
+
+
+def test_scope_backfill_skips_already_consistent_rows_and_catches_inconsistent():
+    consistent = store.build_record(
+        {"action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "no",
+         "in_scope": "no", "scope_reason": "not_an_adc", "proposed_name": "Pembrolizumab"},
+        session_id="s1", served_stratum={},
+    )
+    missing = {
+        "action": "label", "program_id": "p2", "gate_reached": 1, "is_adc": "no",
+        "in_scope": None, "scope_reason": None, "proposed_name": "AZD4045",
+        "event_id": "old-p2", "timestamp": "2026-08-27T00:00:00+00:00",
+        "decided_by": "human", "blind": True,
+    }
+    inconsistent = {
+        "action": "label", "program_id": "p3", "gate_reached": 1, "is_adc": "no",
+        "in_scope": "yes", "scope_reason": None, "proposed_name": "ETBX-051",
+        "event_id": "old-p3", "timestamp": "2026-08-30T00:00:00+00:00",
+        "decided_by": "human", "blind": True,
+    }
+    need = migration.rows_needing_scope_backfill([consistent, missing, inconsistent])
+    assert {r["program_id"] for r in need} == {"p2", "p3"}
+
+    filled = migration.build_scope_backfill_record(inconsistent)
+    store.validate_label_payload({
+        "action": "label", "gate_reached": 1, "is_adc": filled["is_adc"],
+        "in_scope": filled["in_scope"], "scope_reason": filled["scope_reason"],
+    })
+    assert filled["is_adc"] == "no"
+    assert filled["in_scope"] == "no"
+    assert filled["scope_reason"] == "not_an_adc"
+    assert filled["session_id"] == migration.BACKFILL_SESSION_ID
+    assert filled["program_id"] == "p3"
+
+
+def test_not_an_adc_suffix_candidates_uses_latest_and_synonyms():
+    no_suffix = store.build_record(
+        {"action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "no",
+         "proposed_name": "Pembrolizumab"},
+        session_id="s1", served_stratum={},
+    )
+    suffix_on_name = store.build_record(
+        {"action": "label", "program_id": "p2", "gate_reached": 1, "is_adc": "no",
+         "proposed_name": "Sacituzumab govitecan"},
+        session_id="s1", served_stratum={},
+    )
+    suffix_on_synonym_only = store.build_record(
+        {"action": "label", "program_id": "p3", "gate_reached": 1, "is_adc": "no",
+         "proposed_name": "SGN-35"},
+        session_id="s1", served_stratum={},
+    )
+    later_flip = store.build_record(
+        {"action": "label", "program_id": "p2", "gate_reached": 2, "is_adc": "yes",
+         "in_scope": "no", "scope_reason": "heme_only", "proposed_name": "Sacituzumab govitecan"},
+        session_id="s1", served_stratum={},
+    )
+    later_flip["timestamp"] = "9999-01-01T00:00:00+00:00"
+
+    result = migration.not_an_adc_suffix_candidates(
+        [no_suffix, suffix_on_name, suffix_on_synonym_only, later_flip],
+        {"p3": {"synonyms": ["Brentuximab vedotin"]}},
+    )
+    assert {r["program_id"] for r in result} == {"p3"}
+    assert result[0]["matched_suffix"] == "vedotin"
+    assert result[0]["matched_on"] == "Brentuximab vedotin"
 
 
 def test_flag_invalid_migration_candidates_finds_pre_schema_rows_with_adc_suffix():
