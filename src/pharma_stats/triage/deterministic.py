@@ -52,6 +52,34 @@ _GENERIC_CLASS_LABEL_RE = re.compile(
     r"\b[A-Za-z][A-Za-z0-9\-]{1,20}[\s-]*ADC\b", re.IGNORECASE,
 )
 
+# Target/mechanism + a non-ADC modality, with no compound identifier —
+# "anti-OX40 monoclonal antibody", "HDAC6 Inhibitor". These are class
+# labels the generic-ADC regex missed (it only fires on the token ADC),
+# and they spent a Layer 2 call in the 100-candidate pilot. is_adc=no:
+# the name itself says this is a mAb or an inhibitor, not an ADC.
+# Deliberately anchored to the whole proposed_name (not synonyms — combo
+# partners pollute those) so "trastuzumab deruxtecan" / a real INN plus
+# a parenthetical class tag does not match.
+_NON_ADC_CLASS_LABEL_RE = re.compile(
+    r"^(?:anti[- ]?)?[A-Za-z][A-Za-z0-9\-/]*(?:[ /][A-Za-z0-9\-/]+)*\s+"
+    r"(?:monoclonal\s+antibody|mabs?|inhibitors?)$",
+    re.IGNORECASE,
+)
+
+# Non-antibody conjugates — see docs/decisions/0002-non-antibody-conjugates.md.
+# Codes are exact name/synonym matches (lowercased); phrases fire as
+# substrings. Keep the code set small and reviewable; do not grow it from
+# model output.
+NON_ANTIBODY_CONJUGATE_CODES = frozenset({
+    "bt5528",
+})
+_NON_ANTIBODY_CONJUGATE_PHRASES = (
+    "bicycle toxin", "bicycle-toxin", "peptide-drug conjugate",
+    "peptide drug conjugate", "small-molecule drug conjugate",
+    "small molecule drug conjugate", "polymer conjugate",
+    "polymer-drug conjugate", "sirna conjugate", "klh conjugate",
+)
+
 KNOWN_ADCS_PATH = REPO_ROOT / "tests" / "fixtures" / "known_adcs.txt"
 IN_SCOPE_MIN_START_DATE = "2012-01-01"  # CLAUDE.md's locked date range floor
 
@@ -126,6 +154,29 @@ def _is_generic_class_label(names: list[str]) -> bool:
     return any(_GENERIC_CLASS_LABEL_RE.search(name) for name in names)
 
 
+def _is_non_adc_class_label_proposed(program: dict) -> bool:
+    """Class-label rejections fire on proposed_name only.
+
+    Synonyms are frequently combo-trial partners (Tambotatug Pelitecan
+    carries 'Anti-PD-1 Humanized Monoclonal Antibody' = serplulimab).
+    Matching those would auto-reject a real ADC because of a neighbour."""
+    name = (program.get("proposed_name") or "").strip()
+    return bool(name) and bool(_NON_ADC_CLASS_LABEL_RE.match(name))
+
+
+def _non_antibody_conjugate_hit(names: list[str]) -> Optional[str]:
+    for name in names:
+        if not name:
+            continue
+        lowered = name.strip().lower()
+        if lowered in NON_ANTIBODY_CONJUGATE_CODES:
+            return name.strip()
+        for phrase in _NON_ANTIBODY_CONJUGATE_PHRASES:
+            if phrase in lowered:
+                return phrase
+    return None
+
+
 def evaluate_is_adc(program: dict) -> tuple[Optional[str], Optional[str]]:
     """(is_adc, rule) from rules 0-3 (the molecule-identity rules) only.
     (None, None) if nothing fires — Layer 2/3 or the human queue decides."""
@@ -142,8 +193,15 @@ def evaluate_is_adc(program: dict) -> tuple[Optional[str], Optional[str]]:
     if any(is_denylisted(n) for n in names if n):
         return "no", "layer1_denylist"
 
+    nac = _non_antibody_conjugate_hit(names)
+    if nac:
+        return "no", f"layer1_non_antibody_conjugate:{nac}"
+
     if _is_generic_class_label(names):
         return "yes", "layer1_generic_class_label"
+
+    if _is_non_adc_class_label_proposed(program):
+        return "no", "layer1_generic_class_label"
 
     return None, None
 

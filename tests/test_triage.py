@@ -56,10 +56,51 @@ def test_evaluate_is_adc_generic_class_label():
 
 
 def test_evaluate_is_adc_generic_class_label_rejects_bare_conjugate():
-    # "conjugate" alone must NOT fire — see module docstring's false-positive note
-    p = _program(proposed_name="Etirinotecan Pegol (Topoisomerase I Inhibitor Polymer Conjugate)")
+    # "conjugate" alone must NOT fire the ADC-yes class-label rule
+    p = _program(proposed_name="XYZ-1234 Conjugate")
     is_adc, rule = det.evaluate_is_adc(p)
     assert is_adc is None
+    assert rule is None
+
+
+def test_evaluate_is_adc_polymer_conjugate_is_not_adc():
+    p = _program(proposed_name="Etirinotecan Pegol (Topoisomerase I Inhibitor Polymer Conjugate)")
+    is_adc, rule = det.evaluate_is_adc(p)
+    assert is_adc == "no"
+    assert rule.startswith("layer1_non_antibody_conjugate")
+
+
+def test_evaluate_is_adc_non_adc_class_label_mab():
+    p = _program(proposed_name="anti-OX40 monoclonal antibody")
+    is_adc, rule = det.evaluate_is_adc(p)
+    assert is_adc == "no"
+    assert rule == "layer1_generic_class_label"
+
+
+def test_evaluate_is_adc_non_adc_class_label_inhibitor():
+    p = _program(proposed_name="HDAC6 Inhibitor")
+    is_adc, rule = det.evaluate_is_adc(p)
+    assert is_adc == "no"
+    assert rule == "layer1_generic_class_label"
+
+
+def test_evaluate_is_adc_class_label_ignores_combo_synonym():
+    # Tambotatug Pelitecan is an ADC; a combo-arm PD-1 mAb synonym must not
+    # auto-reject it as a class-label monoclonal antibody.
+    p = _program(
+        proposed_name="Tambotatug Pelitecan",
+        synonyms=["Anti-PD-1 Humanized Monoclonal Antibody", "YL201"],
+    )
+    is_adc, rule = det.evaluate_is_adc(p)
+    assert is_adc is None
+    assert rule is None
+
+
+def test_evaluate_is_adc_bicycle_toxin_conjugate_code():
+    p = _program(proposed_name="BT5528")
+    is_adc, rule = det.evaluate_is_adc(p)
+    assert is_adc == "no"
+    assert "non_antibody_conjugate" in rule
 
 
 def test_evaluate_is_adc_known_list_exact_match():
@@ -234,6 +275,8 @@ def test_run_layer2_escalates_and_resolves_by_majority(monkeypatch):
     # candidate is still routed to Layer 3 preferentially regardless of
     # how confident the final majority looks (see route_to_layer3)
     assert results["p1"].disagreement is True
+    assert results["p1"].grounding_forced_recall is True
+    assert results["p1"].from_recall is True
     assert log["n_escalated_groups"] == 1
 
 
@@ -265,7 +308,7 @@ def test_route_to_layer3_on_unsure_disagreement_or_recall():
     unsure = layer2.CandidateAnswer("p1", "x", "unsure", False, None, 3, False, [])
     disagreeing = layer2.CandidateAnswer("p2", "x", "no", False, None, 5, True, [])
     recall = layer2.CandidateAnswer("p3", "x", "yes", True, None, 3, False, [])
-    confident = layer2.CandidateAnswer("p4", "x", "yes", False, "quoted text", 3, False, [])
+    confident = layer2.CandidateAnswer("p4", "x", "yes", False, "antibody-drug conjugate", 3, False, [])
     assert layer2.route_to_layer3(unsure) is True
     assert layer2.route_to_layer3(disagreeing) is True
     assert layer2.route_to_layer3(recall) is True
@@ -287,7 +330,7 @@ def test_run_layer3_parses_answers(monkeypatch):
     monkeypatch.setattr(layer3.model_client, "submit_batch", lambda requests, model: "batch1")
     monkeypatch.setattr(layer3.model_client, "poll_batch_until_done", lambda batch_id, **kw: {"processing_status": "ended"})
     monkeypatch.setattr(layer3.model_client, "collect_batch_results", lambda batch_id, **kw: {
-        "l3:p1": (json.dumps({"is_adc": "yes", "quote": "an ADC", "source_url": "https://x"}),
+        "l3_p1": (json.dumps({"is_adc": "yes", "quote": "an ADC", "source_url": "https://x"}),
                   model_client.Usage(100, 50, "claude-sonnet-4-6")),
         # p2 missing entirely — simulates an errored/expired batch request
     })
@@ -298,6 +341,7 @@ def test_run_layer3_parses_answers(monkeypatch):
     assert answers["p2"].is_adc == "unsure"  # missing result never guessed
     assert log["n_candidates"] == 2
     assert log["n_unsure"] == 1
+    assert "cost_usd" in log["usage"]
 
 
 def test_run_layer3_refuses_to_exceed_cap(monkeypatch):
@@ -508,3 +552,255 @@ def test_recall_vs_text_gap_reports_both_rates():
     assert gap["text_agreement_rate"] == pytest.approx(19 / 20)
     assert gap["recall_agreement_rate"] == pytest.approx(13 / 20)
     assert gap["gap"] > 0.2  # recall is materially worse in this example
+
+
+def test_layer2_custom_id_is_anthropic_legal():
+    cid = layer2._round_custom_id(0, 0)
+    assert model_client.ANTHROPIC_CUSTOM_ID_RE.fullmatch(cid)
+    assert ":" not in cid
+
+
+def test_layer3_custom_id_sanitizes_slash_and_colon():
+    from pharma_stats.triage import layer3
+
+    safe = layer3._custom_id("p1")
+    assert safe == "l3_p1"
+    assert model_client.ANTHROPIC_CUSTOM_ID_RE.fullmatch(safe)
+
+    slashed = layer3._custom_id("cand_0032e66d66_trifluridine/tipiracil")
+    assert "/" not in slashed
+    assert ":" not in slashed
+    assert model_client.ANTHROPIC_CUSTOM_ID_RE.fullmatch(slashed)
+    # deterministic — collect_layer3_answers looks up the same id
+    assert slashed == layer3._custom_id("cand_0032e66d66_trifluridine/tipiracil")
+
+
+def test_submit_batch_rejects_illegal_custom_id_before_calling_api():
+    with pytest.raises(model_client.ModelClientError, match="custom_id"):
+        model_client.submit_batch([{"custom_id": "g0:s0", "prompt": "x"}])
+
+
+def test_serve_plan_skips_committable_denylist():
+    from pharma_stats.labelling.triage_serve import serve_plan
+
+    p = _program(proposed_name="Pembrolizumab")
+    plan = serve_plan(p, heme_auto_ok=False, model_gate_ok=False)
+    assert plan.skip is True
+    assert plan.start_gate == 1
+
+
+def test_serve_plan_elimination_does_not_skip_gate2():
+    from pharma_stats.labelling.triage_serve import serve_plan
+
+    # known ADC but trials unclassified — Layer 1 would "resolve" in_scope=yes
+    # by elimination, which is not a real scope call
+    p = _program(
+        proposed_name="Trastuzumab Deruxtecan",
+        sponsors_over_time=[{"sponsor": "Daiichi", "class": "INDUSTRY"}],
+        trial_scope={"NCT1": "ambiguous"},
+        trials=[{"start_date": "2015-01-01"}],
+    )
+    plan = serve_plan(p)
+    assert plan.skip is False
+    assert plan.start_gate == 2
+    assert "elimination" in (plan.context or {}).get("rule", "")
+
+
+def test_serve_plan_gate3_for_known_adc_in_scope_yes():
+    from pharma_stats.labelling.triage_serve import serve_plan
+
+    p = _program(
+        proposed_name="Trastuzumab Deruxtecan",
+        sponsors_over_time=[{"sponsor": "Daiichi", "class": "INDUSTRY"}],
+        trial_scope={"NCT1": "solid"},
+        trials=[{"start_date": "2015-01-01"}],
+    )
+    plan = serve_plan(p)
+    assert plan.skip is False
+    assert plan.start_gate == 3
+    assert plan.context["auto_derived"] is True
+    assert plan.context["is_adc"] == "yes"
+    assert "layer1_positive_in_scope" in plan.context["rule"]
+
+
+def test_serve_plan_holds_heme_only_when_gate_closed():
+    from pharma_stats.labelling.triage_serve import serve_plan
+
+    p = _program(
+        proposed_name="Trastuzumab Deruxtecan",
+        trial_scope={"NCT1": "heme", "NCT2": "heme"},
+        sponsors_over_time=[{"sponsor": "Acme", "class": "INDUSTRY"}],
+    )
+    held = serve_plan(p, heme_auto_ok=False)
+    assert held.skip is False
+    assert held.start_gate == 2  # is_adc known, scope left for the human
+
+    released = serve_plan(p, heme_auto_ok=True)
+    assert released.skip is True
+
+
+def test_serve_plan_reopened_always_full_flow():
+    from pharma_stats.labelling.triage_serve import serve_plan
+
+    p = _program(proposed_name="Pembrolizumab")
+    plan = serve_plan(p, reopened=True)
+    assert plan.skip is False
+    assert plan.start_gate == 1
+    assert plan.reopened is True
+    assert plan.context is None
+
+
+def test_consume_reopens_is_read_once(tmp_path):
+    from pharma_stats.labelling import triage_serve
+
+    path = tmp_path / "reopen.json"
+    path.write_text('{"program_ids": ["a", "b"]}\n', encoding="utf-8")
+    assert triage_serve.consume_reopen_ids(path) == ["a", "b"]
+    assert triage_serve.consume_reopen_ids(path) == []
+    session = {"order": ["b", "c"], "reopen_queue": []}
+    # file is empty now — ingest is a no-op
+    accepted = triage_serve.ingest_reopens(session, {"a", "b", "c"}, path=path)
+    assert accepted == []
+    path.write_text('{"program_ids": ["a", "unknown"]}\n', encoding="utf-8")
+    accepted = triage_serve.ingest_reopens(session, {"a", "b", "c"}, path=path)
+    assert accepted == ["a"]
+    assert session["reopen_queue"] == ["a"]
+    assert "a" not in session["order"] or session["order"][0] != "x"
+
+
+def test_layer1_apply_writes_gold_and_staging(tmp_path, monkeypatch):
+    from pharma_stats.labelling import store
+    from pharma_stats.triage import apply as triage_apply
+    from pharma_stats.triage import staging
+
+    gold_path = tmp_path / "labels.jsonl"
+    stage_path = tmp_path / "staged.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    monkeypatch.setattr(staging, "STAGING_PATH", stage_path)
+    monkeypatch.setattr(triage_apply.q, "load_session", lambda: None)
+
+    programs = [
+        _program(program_id="p_deny", proposed_name="Pembrolizumab",
+                 candidate_id="c1", discovery_strategy="pattern_match"),
+        _program(program_id="p_adc", proposed_name="Trastuzumab Deruxtecan",
+                 candidate_id="c2",
+                 sponsors_over_time=[{"sponsor": "Daiichi", "class": "INDUSTRY"}],
+                 trial_scope={"NCT1": "solid"},
+                 trials=[{"start_date": "2015-01-01"}]),
+    ]
+    result = triage_apply.apply_layer1(programs, dry_run=False, run_id="test-run")
+    assert result["n_is_adc_no"] == 1
+    gold = store.load_records(gold_path)
+    assert len(gold) == 1
+    assert gold[0]["decided_by"] == "auto"
+    assert gold[0]["is_adc"] == "no"
+    assert gold[0]["program_id"] == "p_deny"
+    staged = staging.load_records(stage_path)
+    assert len(staged) == 1
+    assert staged[0]["decided_by"] == "auto"
+    # the in-scope ADC is not written — Gate 3 stays human
+    assert result["n_commit"] == 1
+
+
+# --------------------------------------------------------------- grounding --
+
+def test_truncate_at_word_does_not_split_tipiracil():
+    from pharma_stats.triage import grounding
+
+    text = "TAS-102 (trifluridine and tipiracil hydrochloride) is an oral combination"
+    cut = text.index("tipiracil") + len("tipira")  # mid-word, the old bug
+    assert text[cut:cut + 3] == "cil"
+    out = grounding.truncate_at_word(text, cut)
+    assert "tipirac" not in out or "tipiracil" in out
+    assert not out.endswith("tipirac")
+
+
+def test_snippet_mentions_candidate_drops_combo_partner():
+    from pharma_stats.triage import grounding
+
+    inavolisib = "Inavolisib will be administered orally as per schedule specified in the respective arms."
+    assert grounding.snippet_mentions_candidate(inavolisib, "SY-5609") is False
+    own = "SY-5609 is an oral CDK7 inhibitor administered once daily."
+    assert grounding.snippet_mentions_candidate(own, "SY-5609") is True
+
+
+def test_quote_grounds_yes_requires_modality_term():
+    from pharma_stats.triage import grounding
+
+    boilerplate = (
+        "The purpose of this study is to evaluate the safety, tolerability, "
+        "and pharmacokinetics of BAT8010 in patients with advanced solid tumors."
+    )
+    assert grounding.quote_grounds_yes(boilerplate) is False
+    assert grounding.quote_grounds_yes("BAT8010 is an antibody-drug conjugate targeting HER2") is True
+    assert grounding.quote_grounds_yes("an exatecan payload conjugated to the antibody") is True
+
+
+def test_quote_grounds_no_rejects_infusion_boilerplate():
+    from pharma_stats.triage import grounding
+
+    assert grounding.quote_grounds_no("Solution for infusion") is False
+    assert grounding.quote_grounds_no("administered intravenously") is False
+    assert grounding.quote_grounds_no("ABT-494 capsule administered orally twice daily") is True
+    assert grounding.quote_grounds_no("PDR001 is a humanized anti-PD1 IgG4 antibody") is True
+
+
+def test_apply_grounding_forces_recall_on_unprobative_quote():
+    from pharma_stats.triage import grounding
+
+    fr, forced = grounding.apply_grounding(
+        "yes", False,
+        "The purpose of this study is to evaluate the safety of BAT8010.",
+    )
+    assert fr is True and forced is True
+    fr, forced = grounding.apply_grounding("no", False, "Solution for infusion")
+    assert fr is True and forced is True
+    fr, forced = grounding.apply_grounding("yes", False, "antibody-drug conjugate")
+    assert fr is False and forced is False
+
+
+def test_evidence_source_unsure_empty_quote_is_not_text():
+    from pharma_stats.triage import grounding
+
+    assert grounding.evidence_source("unsure", False, None) == "no_usable_evidence"
+    assert grounding.evidence_source("unsure", False, "") == "no_usable_evidence"
+    assert grounding.evidence_source("yes", True, None) == "recall"
+    assert grounding.evidence_source("no", False, "oral tablet") == "text"
+
+
+def test_confidence_label_unanimous_vs_escalated():
+    from pharma_stats.triage import grounding
+
+    assert grounding.confidence_label(disagreement=False, votes=["no", "no", "no"]) == "unanimous"
+    assert grounding.confidence_label(disagreement=True, votes=["yes", "no", "no", "no", "no"]) == "escalated-and-resolved"
+    assert grounding.confidence_label(disagreement=True, votes=["yes", "no"]) == "escalated-and-split"
+
+
+def test_parse_pilot_markdown_old_and_new_columns(tmp_path):
+    from pharma_stats.triage import report as trep
+
+    old = tmp_path / "old.md"
+    old.write_text(
+        "# Triage pilot report\n\nRun `x` — 1 candidate(s).\n\n"
+        "| name | verdict | confidence | quote | from_recall | -> Layer 3 |\n"
+        "|---|---|---|---|---|---|\n"
+        "| BAT8010 | yes | text | safety of BAT8010 | False | False |\n",
+        encoding="utf-8",
+    )
+    _, rows = trep.parse_pilot_markdown(old)
+    assert rows[0]["name"] == "BAT8010"
+    assert rows[0]["from_recall"] is False
+    assert rows[0]["routed_to_layer3"] is False
+
+    new = tmp_path / "new.md"
+    new.write_text(
+        "# Triage pilot report\n\nRun `x` — 1 candidate(s).\n\n"
+        "| name | verdict | confidence | evidence | quote | from_recall | -> Layer 3 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| BAT8010 | yes | unanimous | text | antibody-drug conjugate | False | False |\n",
+        encoding="utf-8",
+    )
+    _, rows = trep.parse_pilot_markdown(new)
+    assert rows[0]["quote"] == "antibody-drug conjugate"
+    assert rows[0]["evidence_source"] == "text"
+    assert rows[0]["from_recall"] is False

@@ -98,7 +98,10 @@
   #help table td { border: none; padding: 3px 8px; }
   #help kbd { font-family: var(--mono); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
 
-  #done { padding: 60px; text-align: center; color: var(--muted); }
+  section.card.triage-banner { border-color: var(--warn); background: #241c10; }
+  section.card.triage-banner h2 { color: var(--warn); }
+  section.card.reopen-banner { border-color: var(--accent); }
+  #triageOverride { margin-top: 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -107,6 +110,8 @@
   <span><b id="labelledCount">–</b> / <span id="totalCount">–</span> labelled (gate 3)</span>
   <span title="triage rejections — never count toward the label target">gate1 <b id="gate1Count">–</b> / gate2 <b id="gate2Count">–</b> rejected</span>
   <span><b id="queueCount">–</b> in fresh queue</span>
+  <span>G1 <b id="queueGate1">–</b> / G3 <b id="queueGate3">–</b> entry</span>
+  <span>~<b id="hoursLeft">–</b>h to 100 labels</span>
   <span>median <b id="medianSec">–</b>s/label</span>
   <span id="timer">0.0s</span>
   <span class="spacer"></span>
@@ -122,6 +127,8 @@
     <div id="programView"></div>
   </div>
   <div id="right">
+    <div id="reopenBanner" style="display:none"></div>
+    <div id="triageBanner" style="display:none"></div>
     <div class="field" id="gate1">
       <label>Gate 1 — is this an ADC? (molecule judgement, nothing else)</label>
       <div class="choicegrid" id="isAdcChoices"></div>

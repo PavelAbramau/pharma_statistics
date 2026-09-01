@@ -22,10 +22,13 @@ from pharma_stats.labelling import queue as q
 from pharma_stats.labelling import stats as label_stats
 from pharma_stats.labelling import store
 from pharma_stats.labelling import trial_scope as ts
+from pharma_stats.labelling import triage_serve
 from pharma_stats.labelling.vocab import (
     APP_VERSION, CONFIDENCE_LEVELS, CONFIRMATION_EVIDENCE_TYPES, GATE2_SCOPE_OUT_REASONS,
     IN_SCOPE_VALUES, IS_ADC_VALUES, KILL_REASONS, PROGRAM_STATUSES, SCOPE_OUT_REASONS,
 )
+from pharma_stats.triage import staging as triage_staging
+from pharma_stats.triage import validation as tval
 
 STATIC_DIR = Path(__file__).with_name("static")
 
@@ -57,6 +60,8 @@ def _init_state() -> None:
     if session is None:
         session = q.new_session(programs, exclude_ids=reviewed)
         q.save_session(session)
+    triage_serve.ingest_reopens(session, set(programs_by_id))
+    q.save_session(session)
 
     _state.update(programs=programs, programs_by_id=programs_by_id, session=session)
 
@@ -86,12 +91,38 @@ def _validation_sample_ids() -> set[str]:
     return {item["program_id"] for item in ts.load_validation_sample()}
 
 
-def _program_public(program: dict, *, reveal: bool) -> dict:
+def _triage_holdout_ids() -> set[str]:
+    return {d["program_id"] for d in tval.load_validation_sample()}
+
+
+def _serve_plan_for(program: dict, *, reopened: bool, gold_records: list[dict]) -> triage_serve.ServePlan:
+    heme_holdout = _validation_sample_ids()
+    triage_holdout = _triage_holdout_ids()
+    heme_auto_ok, _ = triage_serve.heme_only_auto_exclude_allowed(_state["programs"], gold_records)
+    model_ok, _ = triage_serve.model_layer_gate_passed(gold_records)
+    staged = triage_staging.latest_by_program(triage_staging.load_records())
+    pid = program["program_id"]
+    return triage_serve.serve_plan(
+        program,
+        reopened=reopened,
+        heme_holdout=pid in heme_holdout,
+        triage_holdout=pid in triage_holdout,
+        heme_auto_ok=heme_auto_ok,
+        model_gate_ok=model_ok,
+        staged_record=staged.get(pid),
+    )
+
+
+def _program_public(
+    program: dict, *, reveal: bool, start_gate: int = 1,
+    reopened: bool = False, triage_context: Optional[dict] = None,
+) -> dict:
     name = program["proposed_name"]
     # The 30-program blind validation sample must look exactly like any
     # other candidate — no scope hint, no pre-fill, nothing that tips off
     # the reviewer that the classifier already has an opinion here.
     in_validation_sample = program["program_id"] in _validation_sample_ids()
+    hide_triage = in_validation_sample or program["program_id"] in _triage_holdout_ids()
     out = {
         "program_id": program["program_id"],
         "candidate_id": program["candidate_id"],
@@ -130,6 +161,9 @@ def _program_public(program: dict, *, reveal: bool) -> dict:
         # so they're never withheld: pre-fill and sort, never delete.
         "non_oncology_hint": program.get("non_oncology_hint", False),
         "non_industry_sponsor_hint": program.get("non_industry_sponsor_hint", False),
+        "start_gate": 1 if hide_triage else start_gate,
+        "reopened": reopened,
+        "triage_context": None if hide_triage else triage_context,
         "links": {
             "pubmed_search": "https://pubmed.ncbi.nlm.nih.gov/?term="
             + urllib.parse.quote(name),
@@ -173,20 +207,33 @@ def next_program(blind: bool = True):
         _sweep_stale_pending()
 
         records = store.load_records()
+        reviewed = store.reviewed_program_ids(records)
         # repeat-probe self-consistency re-serves only ever come from fully
         # (gate 3) labelled programs — a gate-1/2 triage rejection has no
         # status/kill_reason to compare against, see stats.self_consistency
         fully_labelled = store.fully_labelled_program_ids(records)
 
+        triage_serve.ingest_reopens(session, set(_state["programs_by_id"]))
+        reopen_queue = session.setdefault("reopen_queue", [])
+
         program = None
         is_repeat = False
+        serving_reopen = False
+        plan = None
         # Bounded, not infinite: skipped-for-coverage programs get
         # requeued (a future backfill may fix them), so an unbounded loop
         # here could spin forever if nothing in the queue has full
         # coverage yet.
-        max_attempts = len(session["order"]) + len(fully_labelled) + 2
+        max_attempts = len(session["order"]) + len(reopen_queue) + len(fully_labelled) + 2
         for _ in range(max_attempts):
-            program_id, is_repeat = q.pop_next(session, fully_labelled)
+            serving_reopen = False
+            if reopen_queue:
+                program_id = reopen_queue.pop(0)
+                is_repeat = False
+                session["total_served"] = session.get("total_served", 0) + 1
+                serving_reopen = True
+            else:
+                program_id, is_repeat = q.pop_next(session, fully_labelled)
             if program_id is None:
                 q.save_session(session)
                 return JSONResponse({"done": True, "message": "Queue exhausted — every provisional program has been labelled or flagged."})
@@ -195,15 +242,24 @@ def next_program(blind: bool = True):
                 # Program vanished from the materialized set since the session
                 # was built (e.g. warehouse rebuilt); drop it and try the next one.
                 continue
+            if program_id in reviewed and not serving_reopen:
+                # Auto-triage (or a later gold line) landed since this
+                # session was built — drop, don't requeue.
+                continue
             if program["history_coverage"] != "full":
                 # Refuse to serve: an empty/incomplete event timeline here
                 # is visually indistinguishable from "genuinely never
                 # amended", the strongest silence signal there is. Missing
                 # data must never be servable as evidence. Requeue rather
                 # than drop — a later backfill pass may complete it.
-                if not is_repeat:
+                if not is_repeat and not serving_reopen:
                     q.requeue(session, program_id)
+                elif serving_reopen:
+                    reopen_queue.append(program_id)
                 program = None
+                continue
+            plan = _serve_plan_for(program, reopened=serving_reopen, gold_records=records)
+            if plan.skip and not serving_reopen:
                 continue
             break
 
@@ -222,7 +278,12 @@ def next_program(blind: bool = True):
             "done": False,
             "serve_token": serve_token,
             "session_id": session["session_id"],
-            "program": _program_public(program, reveal=not blind),
+            "program": _program_public(
+                program, reveal=not blind,
+                start_gate=plan.start_gate if plan else 1,
+                reopened=serving_reopen,
+                triage_context=plan.context if plan else None,
+            ),
         }
 
 
@@ -310,6 +371,19 @@ def session_stats():
 
         fully_labelled = store.fully_labelled_program_ids(records)
 
+        heme_auto_ok, _ = triage_serve.heme_only_auto_exclude_allowed(programs, records)
+        model_ok, _ = triage_serve.model_layer_gate_passed(records)
+        remaining = list(session.get("reopen_queue") or []) + list(session.get("order") or [])
+        composition = triage_serve.queue_composition(
+            programs, remaining,
+            gold_records=records,
+            heme_auto_ok=heme_auto_ok,
+            model_gate_ok=model_ok,
+            heme_holdout_ids=_validation_sample_ids(),
+            triage_holdout_ids=_triage_holdout_ids(),
+            reopen_ids=session.get("reopen_queue") or [],
+        )
+
         return {
             "session_id": session["session_id"],
             "app_version": APP_VERSION,
@@ -317,13 +391,19 @@ def session_stats():
             # "labelled" means gate 3 only — triage rejections never count
             # toward this or the stratum/target numbers below.
             "labelled_count": len(fully_labelled),
-            "remaining_fresh_in_queue": len(session["order"]),
+            "remaining_fresh_in_queue": composition["manual_queue"],
             **label_stats.gate_counts(records),
             **label_stats.blind_counts(records),
             "median_seconds_per_label": label_stats.median_seconds_per_label(records),
             "stratum_progress": label_stats.stratum_progress(programs, fully_labelled),
             "self_consistency": label_stats.self_consistency(records),
             "gate1_rejection_pattern_counts": label_stats.gate1_rejection_pattern_counts(records),
+            "queue_enter_gate1": composition["enter_gate1"],
+            "queue_enter_gate2": composition["enter_gate2"],
+            "queue_enter_gate3": composition["enter_gate3"],
+            "hours_left_to_target": composition["hours_left_to_target"],
+            "remaining_to_target": composition["remaining_to_target"],
+            "gate3_target": composition["gate3_target"],
         }
 
 

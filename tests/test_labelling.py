@@ -541,6 +541,8 @@ def test_app_end_to_end(warehouse, monkeypatch, tmp_path):
     monkeypatch.setattr(store, "LABELS_PATH", gold_path)
     monkeypatch.setattr(q, "SESSION_PATH", session_path)
     monkeypatch.setattr(pp, "WAREHOUSE_DB", warehouse)
+    from pharma_stats.labelling import triage_serve
+    monkeypatch.setattr(triage_serve, "REOPEN_PATH", tmp_path / "reopen.json")
 
     import pharma_stats.labelling.app as appmod
     appmod._state.clear()
@@ -594,6 +596,8 @@ def test_app_gate1_rejection_end_to_end(warehouse, monkeypatch, tmp_path):
     monkeypatch.setattr(store, "LABELS_PATH", gold_path)
     monkeypatch.setattr(q, "SESSION_PATH", session_path)
     monkeypatch.setattr(pp, "WAREHOUSE_DB", warehouse)
+    from pharma_stats.labelling import triage_serve
+    monkeypatch.setattr(triage_serve, "REOPEN_PATH", tmp_path / "reopen.json")
 
     import pharma_stats.labelling.app as appmod
     appmod._state.clear()
@@ -646,6 +650,8 @@ def test_app_gate2_rejection_end_to_end(warehouse, monkeypatch, tmp_path):
     monkeypatch.setattr(store, "LABELS_PATH", gold_path)
     monkeypatch.setattr(q, "SESSION_PATH", session_path)
     monkeypatch.setattr(pp, "WAREHOUSE_DB", warehouse)
+    from pharma_stats.labelling import triage_serve
+    monkeypatch.setattr(triage_serve, "REOPEN_PATH", tmp_path / "reopen.json")
 
     import pharma_stats.labelling.app as appmod
     appmod._state.clear()
@@ -711,6 +717,8 @@ def test_app_refuses_to_serve_incomplete_coverage_and_requeues_it(warehouse, mon
     monkeypatch.setattr(store, "LABELS_PATH", gold_path)
     monkeypatch.setattr(q, "SESSION_PATH", session_path)
     monkeypatch.setattr(pp, "WAREHOUSE_DB", warehouse)
+    from pharma_stats.labelling import triage_serve
+    monkeypatch.setattr(triage_serve, "REOPEN_PATH", tmp_path / "reopen.json")
 
     import pharma_stats.labelling.app as appmod
     appmod._state.clear()
@@ -818,6 +826,50 @@ def test_mesh_coverage_aggregates_across_programs():
 
 def test_mesh_coverage_empty_universe():
     assert trial_scope.mesh_coverage([]) == {"covered": 0, "total": 0, "coverage_rate": 0.0}
+
+
+def test_scope_distribution_splits_coverage_from_classification():
+    programs = [
+        {
+            "trial_scope": {"NCT1": "heme", "NCT2": "ambiguous", "NCT3": "solid"},
+            "trial_has_mesh": {"NCT1": True, "NCT2": True, "NCT3": False},
+        },
+        {
+            "trial_scope": {"NCT4": "ambiguous", "NCT5": "ambiguous"},
+            "trial_has_mesh": {"NCT4": False, "NCT5": False},
+        },
+        {
+            "trial_scope": {"NCT6": "heme"},
+            "trial_has_mesh": {"NCT6": True},
+        },
+        {
+            "trial_scope": {"NCT7": "heme", "NCT8": "ambiguous"},
+            "trial_has_mesh": {"NCT7": True, "NCT8": True},
+        },
+    ]
+    dist = trial_scope.scope_distribution(programs)
+    assert dist["trials"]["heme"] == 3
+    assert dist["trials"]["solid"] == 1
+    assert dist["trials"]["ambiguous"] == 4
+    assert dist["trials"]["total"] == 8
+    assert dist["trials"]["ambiguous_with_mesh"] == 2  # NCT2, NCT8
+    assert dist["trials"]["ambiguous_without_mesh"] == 2  # NCT4, NCT5
+    assert dist["ambiguous_dominates_trials"] is False  # 4/8 is not > 50%
+    assert dist["assets"]["heme_only"] == 1
+    assert dist["assets"]["all_ambiguous"] == 1
+    assert dist["assets"]["both"] == 1  # NCT1/2/3 heme+solid
+    assert dist["assets"]["mixed_other"] == 1  # heme+ambiguous
+
+
+def test_scope_distribution_ambiguous_dominates():
+    programs = [
+        {"trial_scope": {"N1": "ambiguous", "N2": "ambiguous", "N3": "heme"},
+         "trial_has_mesh": {"N1": True, "N2": True, "N3": True}},
+    ]
+    dist = trial_scope.scope_distribution(programs)
+    assert dist["ambiguous_dominates_trials"] is True
+    assert trial_scope.asset_scope_bucket(["ambiguous", "heme"]) == "mixed_other"
+    assert trial_scope.asset_scope_bucket(["heme", "solid"]) == "both"
 
 
 def test_draw_validation_sample_keeps_prior_reservations_and_tops_up():

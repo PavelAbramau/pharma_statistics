@@ -260,6 +260,83 @@ def mesh_coverage(programs: list[dict]) -> dict:
     return {"covered": covered, "total": total, "coverage_rate": rate}
 
 
+def asset_scope_bucket(trial_classifications: list[str]) -> str:
+    """Roll a trial-level heme/solid/non_oncology/ambiguous list up to one
+    asset bucket. Distinct from classify_asset, which only ever returns
+    heme_only vs needs_review — the auto-exclusion rule only cares about
+    that binary. This function is for the coverage report: it says *why*
+    an asset is needs_review (all-ambiguous vs mixed vs spanning both)."""
+    if not trial_classifications:
+        return "no_trials"
+    unique = set(trial_classifications)
+    if unique == {"heme"}:
+        return "heme_only"
+    if unique == {"solid"}:
+        return "solid_only"
+    if "heme" in unique and "solid" in unique:
+        return "both"
+    if unique == {"ambiguous"}:
+        return "all_ambiguous"
+    if unique == {"non_oncology"}:
+        return "non_oncology_only"
+    return "mixed_other"
+
+
+def scope_distribution(programs: list[dict]) -> dict:
+    """Universe-wide MeSH classification mix, trial-level and asset-level.
+
+    `ambiguous` at trial level is NOT the inverse of mesh_coverage:
+    coverage is "has any conditionBrowseModule data"; ambiguous also
+    fires when MeSH is present but the dictionary can't classify it
+    (gap, heme+solid mix, generic basket terms). If ambiguous dominates,
+    heme_only auto-exclusion (which requires ALL trials to classify heme)
+    is weaker than a high coverage rate makes it look — it under-excludes
+    rather than over-excludes, but the qualifying set is coverage noise
+    plus dictionary-gap noise, not a clean heme cohort.
+    """
+    trial_counts = {"heme": 0, "solid": 0, "non_oncology": 0, "ambiguous": 0, "total": 0}
+    ambiguous_with_mesh = 0
+    ambiguous_without_mesh = 0
+    asset_counts = {
+        "heme_only": 0, "solid_only": 0, "both": 0, "all_ambiguous": 0,
+        "non_oncology_only": 0, "mixed_other": 0, "no_trials": 0,
+    }
+    for p in programs:
+        scope = p.get("trial_scope") or {}
+        has_mesh = p.get("trial_has_mesh") or {}
+        classes = list(scope.values())
+        for nct, cat in scope.items():
+            if cat not in trial_counts:
+                trial_counts[cat] = 0
+            trial_counts[cat] += 1
+            trial_counts["total"] += 1
+            if cat == "ambiguous":
+                if has_mesh.get(nct):
+                    ambiguous_with_mesh += 1
+                else:
+                    ambiguous_without_mesh += 1
+        bucket = asset_scope_bucket(classes)
+        asset_counts[bucket] = asset_counts.get(bucket, 0) + 1
+    trial_total = trial_counts["total"] or 0
+    rates = {
+        k: (trial_counts.get(k, 0) / trial_total if trial_total else 0.0)
+        for k in ("heme", "solid", "non_oncology", "ambiguous")
+    }
+    return {
+        "n_programs": len(programs),
+        "trials": {
+            **trial_counts,
+            "rates": rates,
+            "ambiguous_with_mesh": ambiguous_with_mesh,
+            "ambiguous_without_mesh": ambiguous_without_mesh,
+        },
+        "assets": asset_counts,
+        "ambiguous_dominates_trials": bool(
+            trial_total and trial_counts["ambiguous"] > trial_total / 2
+        ),
+    }
+
+
 def auto_scope_decision(asset_category: str) -> Optional[dict]:
     """The pre-fill for a confidently heme_only asset. is_adc is
     deliberately absent: this is a pure scope call (this project is

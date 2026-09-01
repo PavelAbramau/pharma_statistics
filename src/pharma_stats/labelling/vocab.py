@@ -72,4 +72,4 @@ DECIDED_BY_VALUES = ["human", "auto"]
 # count as layer 1 (deterministic, MeSH-based, no model call).
 TRIAGE_LAYERS = [1, 2, 3]
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"

@@ -19,7 +19,7 @@ Every decision this package proposes is decided_by="auto" with a
 triage_layer, triage_rule, and (for layers 2/3) triage_model/
 triage_prompt_version — see labelling/vocab.py and labelling/store.py.
 Nothing here writes to gold/labels.jsonl directly; see
-scripts/run_triage.py (stages to data/triage_pending.json) and
-scripts/apply_triage_decisions.py (the only place that commits, and only
-after validation.check_gate() passes).
+scripts/apply_triage_to_queue.py (Layer 1 committable rejections, after
+the MeSH/agreement gates) and a later bulk-accept for Layer 2/3 once
+validation.check_gate() passes.
 """

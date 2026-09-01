@@ -14,12 +14,20 @@ its own independent search).
 """
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from typing import Optional
 
 from pharma_stats.silver import model_client
 
-MAX_LAYER3_CANDIDATES = 150  # hard cap — reported before running, never silently exceeded
+# Anthropic custom_id is ^[a-zA-Z0-9_-]{1,64}$. program_ids can contain
+# slashes (e.g. trifluridine/tipiracil) and the old "l3:{pid}" prefix used
+# a colon — both 400 the whole batch. Keep a deterministic mapping so
+# collect_layer3_answers can still look results up by program_id.
+_SAFE_PID = re.compile(r"^[a-zA-Z0-9_-]{1,61}$")
+
+MAX_LAYER3_CANDIDATES = 400  # hard cap — reported before running, never silently exceeded
 MODEL = model_client.DEFAULT_MODEL
 MAX_USES = 1  # one search per candidate — this is a targeted lookup, not open research
 PROMPT_VERSION = "layer3-v1"
@@ -60,7 +68,10 @@ Respond with exactly this JSON shape:
 
 
 def _custom_id(program_id: str) -> str:
-    return f"l3:{program_id}"
+    if _SAFE_PID.fullmatch(program_id):
+        return f"l3_{program_id}"
+    digest = hashlib.sha256(program_id.encode("utf-8")).hexdigest()[:32]
+    return f"l3_{digest}"
 
 
 def submit_layer3_batch(candidates: list[dict], *, model: str = MODEL) -> str:
@@ -78,16 +89,20 @@ def submit_layer3_batch(candidates: list[dict], *, model: str = MODEL) -> str:
     return model_client.submit_batch(requests, model=model)
 
 
-def collect_layer3_answers(candidates: list[dict], batch_id: str, *, model: str = MODEL) -> dict[str, Layer3Answer]:
+def collect_layer3_answers(
+    candidates: list[dict], batch_id: str, *, model: str = MODEL,
+) -> tuple[dict[str, Layer3Answer], list]:
     results = model_client.collect_batch_results(batch_id, model=model)
     out: dict[str, Layer3Answer] = {}
+    usages = []
     for c in candidates:
         pid = c["program_id"]
         hit = results.get(_custom_id(pid))
         if hit is None:
             out[pid] = Layer3Answer(pid, c["name"], "unsure", None, None)
             continue
-        text, _usage = hit
+        text, usage = hit
+        usages.append(usage)
         parsed = model_client.extract_json(text)
         if not parsed or parsed.get("is_adc") not in ("yes", "no", "unsure"):
             out[pid] = Layer3Answer(pid, c["name"], "unsure", None, None)
@@ -95,7 +110,7 @@ def collect_layer3_answers(candidates: list[dict], batch_id: str, *, model: str 
         out[pid] = Layer3Answer(
             pid, c["name"], parsed["is_adc"], parsed.get("quote"), parsed.get("source_url"),
         )
-    return out
+    return out, usages
 
 
 def run_layer3(candidates: list[dict], *, model: str = MODEL) -> tuple[dict[str, Layer3Answer], dict]:
@@ -110,10 +125,19 @@ def run_layer3(candidates: list[dict], *, model: str = MODEL) -> tuple[dict[str,
         )
     batch_id = submit_layer3_batch(candidates, model=model)
     model_client.poll_batch_until_done(batch_id)
-    answers = collect_layer3_answers(candidates, batch_id, model=model)
+    answers, usages = collect_layer3_answers(candidates, batch_id, model=model)
 
     log = {
         "prompt_version": PROMPT_VERSION, "model": model, "n_candidates": len(candidates),
         "n_unsure": sum(1 for a in answers.values() if a.is_adc == "unsure"),
+        "usage": {
+            "calls": len(usages),
+            "input_tokens": sum(u.input_tokens for u in usages),
+            "output_tokens": sum(u.output_tokens for u in usages),
+            "cost_usd": sum(
+                model_client.estimate_cost(u.input_tokens, u.output_tokens, u.model, batch=True)
+                for u in usages
+            ),
+        },
     }
     return answers, log

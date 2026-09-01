@@ -39,6 +39,11 @@ async function refreshSessionStats() {
   $("gate2Count").textContent = s.gate2_rejected_count;
   $("queueCount").textContent = s.remaining_fresh_in_queue;
   $("medianSec").textContent = s.median_seconds_per_label ? s.median_seconds_per_label.toFixed(0) : "–";
+  if ($("queueGate1")) $("queueGate1").textContent = s.queue_enter_gate1 ?? "–";
+  if ($("queueGate3")) $("queueGate3").textContent = s.queue_enter_gate3 ?? "–";
+  if ($("hoursLeft")) {
+    $("hoursLeft").textContent = (s.hours_left_to_target != null) ? s.hours_left_to_target.toFixed(1) : "–";
+  }
 
   const patterns = s.gate1_rejection_pattern_counts || [];
   $("gate1PatternBreakdown").textContent = patterns.length
@@ -82,6 +87,7 @@ async function showNext() {
   state.current = data;
   resetForm();
   renderProgram(data.program);
+  applyServePlan(data.program);
   startTimer();
   ensurePrefetch();
   refreshSessionStats();
@@ -319,9 +325,19 @@ function setField(kind, value) {
 
 function showGate(n) {
   state.gate = n;
+  $("gate1").style.display = (n === 1 || state.gatesUnlocked) ? "block" : "none";
   $("gate2").style.display = n >= 2 ? "block" : "none";
   $("gate3").style.display = n >= 3 ? "block" : "none";
   $("gate3Actions").style.display = n >= 3 ? "flex" : "none";
+  // Auto-derived skip of earlier gates: hide them unless the reviewer
+  // explicitly unlocked override.
+  if (!state.gatesUnlocked && n === 3) {
+    $("gate1").style.display = "none";
+    $("gate2").style.display = "none";
+  }
+  if (!state.gatesUnlocked && n === 2) {
+    $("gate1").style.display = "none";
+  }
 }
 
 // Cheap MeSH-derived pre-fill, shown as a hint the reviewer can override —
@@ -339,6 +355,12 @@ function scopeHintReason(p) {
 function chooseIsAdc(value) {
   setField("is_adc", value);
   if (value === "yes") {
+    const ctx = state.current && state.current.program && state.current.program.triage_context;
+    if (ctx && ctx.in_scope === "yes" && !state.gatesUnlocked) {
+      setField("in_scope", "yes");
+      showGate(3);
+      return;
+    }
     showGate(2);
     const reason = scopeHintReason(state.current.program);
     if (reason) {
@@ -377,6 +399,7 @@ function resetForm() {
   };
   state.firstStatusSelected = null;
   state.externalLinkClicked = false;
+  state.gatesUnlocked = false;
   showGate(1);
   document.querySelectorAll(".choice").forEach(b => b.classList.remove("selected"));
   $("killReasonField").style.display = "none";
@@ -389,6 +412,69 @@ function resetForm() {
   $("thirdPartyFirstNotedDate").value = "";
   $("thirdPartySource").value = "";
   $("err").textContent = "";
+}
+
+function overrideTriageGates() {
+  state.gatesUnlocked = true;
+  showGate(1);
+}
+
+function renderTriageBanners(p) {
+  const reopenEl = $("reopenBanner");
+  const triageEl = $("triageBanner");
+  if (reopenEl) {
+    if (p.reopened) {
+      reopenEl.style.display = "block";
+      reopenEl.innerHTML = `<section class="card reopen-banner"><h2>Re-opened for re-decision</h2>
+        <div>Previous gold line is unchanged. This is a new review — Gates 1–3 from scratch, no pre-fill.</div></section>`;
+    } else {
+      reopenEl.style.display = "none";
+      reopenEl.innerHTML = "";
+    }
+  }
+  if (!triageEl) return;
+  const ctx = p.triage_context;
+  const start = p.start_gate || 1;
+  if (!ctx || p.reopened || start === 1) {
+    triageEl.style.display = "none";
+    triageEl.innerHTML = "";
+    return;
+  }
+  const quote = ctx.quote
+    ? `<blockquote style="margin:8px 0; color:var(--text)">${esc(ctx.quote)}</blockquote>`
+    : "";
+  const source = ctx.source_url
+    ? `<div class="sub"><a href="${esc(ctx.source_url)}" target="_blank">${esc(ctx.source_url)}</a></div>`
+    : "";
+  const rule = ctx.rule || ctx.evidence || "";
+  triageEl.style.display = "block";
+  triageEl.innerHTML = `<section class="card triage-banner">
+    <h2>Auto-derived — override if wrong</h2>
+    <div><b>is_adc=${esc(ctx.is_adc || "?")}</b> · <b>in_scope=${esc(ctx.in_scope || "?")}</b>
+      ${ctx.scope_reason ? ` (${esc(ctx.scope_reason)})` : ""}
+      · layer ${esc(ctx.layer)} · ${esc(rule)}</div>
+    ${quote}${source}
+    <div id="triageOverride"><button class="secondary" type="button" id="overrideTriageBtn">Re-answer Gates 1–2</button></div>
+  </section>`;
+  const btn = $("overrideTriageBtn");
+  if (btn) btn.addEventListener("click", overrideTriageGates);
+}
+
+function applyServePlan(p) {
+  renderTriageBanners(p);
+  const start = p.start_gate || 1;
+  const ctx = p.triage_context;
+  if (p.reopened || start === 1) {
+    showGate(1);
+    return;
+  }
+  if (ctx && ctx.is_adc) setField("is_adc", ctx.is_adc);
+  if (start >= 2 && ctx && ctx.in_scope) setField("in_scope", ctx.in_scope);
+  if (start >= 3) {
+    setField("is_adc", "yes");
+    setField("in_scope", "yes");
+  }
+  showGate(start);
 }
 
 // ---------- timer ----------

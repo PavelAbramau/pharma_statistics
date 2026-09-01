@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pharma_stats.silver import model_client
+from pharma_stats.triage import grounding
 
 BATCH_SIZE = 20
 INITIAL_K = 3
@@ -67,6 +68,9 @@ class CandidateAnswer:
     k: int
     disagreement: bool
     votes: list = field(default_factory=list)
+    evidence_source: str = "no_usable_evidence"  # text / recall / no_usable_evidence
+    confidence: str = "unanimous"  # unanimous / escalated-and-resolved / escalated-and-split
+    grounding_forced_recall: bool = False
 
 
 def group_into_batches(evidences: list[dict], batch_size: int = BATCH_SIZE) -> list[list[dict]]:
@@ -98,7 +102,8 @@ ORDER as listed above, each shaped exactly:
 
 
 def _round_custom_id(group_idx: int, sample_idx: int) -> str:
-    return f"g{group_idx}:s{sample_idx}"
+    # Underscore, not colon: Anthropic custom_id is ^[a-zA-Z0-9_-]{1,64}$.
+    return f"g{group_idx}_s{sample_idx}"
 
 
 def submit_round(
@@ -194,15 +199,24 @@ def _resolve_group(
         votes, answers = _tally(pid, indexed_samples)
         disagreement = initial_disagreement.get(pid, True)
         if not votes:
-            out[pid] = CandidateAnswer(pid, ev["name"], "unsure", False, None, actual_k, True, [])
+            out[pid] = CandidateAnswer(
+                pid, ev["name"], "unsure", False, None, actual_k, True, [],
+                evidence_source="no_usable_evidence",
+                confidence=grounding.confidence_label(disagreement=True, votes=[]),
+            )
             continue
         top_value, _top_count = Counter(votes).most_common(1)[0]
         winning = [a for a in answers if a.get("is_adc") == top_value]
         from_recall = bool(winning) and sum(1 for a in winning if a.get("from_recall")) > len(winning) / 2
         quote = next((a.get("quote") for a in winning if a.get("quote")), None)
+        from_recall, forced = grounding.apply_grounding(top_value, from_recall, quote)
+        conf = grounding.confidence_label(disagreement=disagreement, votes=votes)
+        src = grounding.evidence_source(top_value, from_recall, quote)
         out[pid] = CandidateAnswer(
             program_id=pid, name=ev["name"], is_adc=top_value,
-            from_recall=from_recall, quote=quote, k=actual_k, disagreement=disagreement, votes=votes,
+            from_recall=from_recall, quote=quote, k=actual_k, disagreement=disagreement,
+            votes=votes, evidence_source=src, confidence=conf,
+            grounding_forced_recall=forced,
         )
     return out
 

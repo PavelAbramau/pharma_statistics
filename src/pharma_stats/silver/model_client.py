@@ -29,7 +29,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import NamedTuple, Optional
+
+# Anthropic Message Batches API: custom_id must match this exactly or the
+# whole batch 400s. Colons, slashes, and other punctuation are illegal —
+# see triage/layer2.py and triage/layer3.py, which previously used "g0:s0"
+# / "l3:{program_id}" and staged 0 decisions as a result.
+ANTHROPIC_CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 RED_TEAM_MODEL = "claude-sonnet-4-6"
@@ -156,6 +163,14 @@ def submit_batch(requests: list[dict], *, model: str = DEFAULT_MODEL) -> str:
     import anthropic
     from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
     from anthropic.types.messages.batch_create_params import Request
+
+    for r in requests:
+        cid = r.get("custom_id")
+        if not isinstance(cid, str) or not ANTHROPIC_CUSTOM_ID_RE.fullmatch(cid):
+            raise ModelClientError(
+                f"custom_id {cid!r} does not match Anthropic's "
+                r"^[a-zA-Z0-9_-]{1,64}$ — the whole batch would 400"
+            )
 
     client = _client()
     batch_requests = []

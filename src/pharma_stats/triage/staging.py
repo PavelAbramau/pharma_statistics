@@ -34,6 +34,7 @@ def build_record(decision: dict, *, run_id: str) -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "run_id": run_id,
         "status": "pending",  # pending | accepted | rejected — set only by a later bulk-decision step
+        "decided_by": "auto",
         "program_id": decision["program_id"],
         "proposed_name": decision.get("proposed_name"),
         "is_adc": decision.get("is_adc"),
@@ -45,6 +46,9 @@ def build_record(decision: dict, *, run_id: str) -> dict:
         "prompt_version": decision.get("prompt_version"),
         "from_recall": decision.get("from_recall"),
         "quote": decision.get("quote"),
+        "evidence_source": decision.get("evidence_source"),
+        "confidence": decision.get("confidence"),
+        "grounding_forced_recall": bool(decision.get("grounding_forced_recall")),
         "manual_overflow": bool(decision.get("manual_overflow")),
         "manual_overflow_reason": decision.get("manual_overflow_reason"),
     }

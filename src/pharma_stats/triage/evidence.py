@@ -25,6 +25,7 @@ from typing import Optional
 import duckdb
 
 from pharma_stats.labelling.provisional_programs import _best_trial_snapshot, _study_from_body
+from pharma_stats.triage.grounding import snippet_mentions_candidate, truncate_at_word
 
 BRIEF_SUMMARY_CHARS = 300
 MAX_TRIALS_FOR_TEXT = 3   # cap raw-snapshot reads per candidate — token/latency efficiency
@@ -71,19 +72,25 @@ def build_layer2_evidence(program: dict, con: duckdb.DuckDBPyConnection) -> dict
             break
 
     text_snippets: list[str] = []
+    name = program.get("proposed_name")
+    synonyms = (program.get("synonyms") or [])[:MAX_SYNONYMS]
     trials = program.get("trials") or []
     for t in trials[:MAX_TRIALS_FOR_TEXT]:
         brief_summary, descriptions = _trial_text_fields(t["nct_id"], con)
+        candidates = []
         if brief_summary:
-            text_snippets.append(brief_summary[:BRIEF_SUMMARY_CHARS])
-        text_snippets.extend(d for d in descriptions if d)
+            candidates.append(truncate_at_word(brief_summary, BRIEF_SUMMARY_CHARS))
+        candidates.extend(d for d in descriptions if d)
+        for snippet in candidates:
+            if snippet_mentions_candidate(snippet, name, synonyms):
+                text_snippets.append(snippet)
         if len(text_snippets) >= MAX_TEXT_SNIPPETS:
             break
 
     return {
         "program_id": program["program_id"],
-        "name": program.get("proposed_name"),
-        "synonyms": (program.get("synonyms") or [])[:MAX_SYNONYMS],
+        "name": name,
+        "synonyms": synonyms,
         "lead_sponsor": lead_sponsor,
         "conditions": conditions[:MAX_CONDITIONS],
         "text_snippets": text_snippets[:MAX_TEXT_SNIPPETS],
