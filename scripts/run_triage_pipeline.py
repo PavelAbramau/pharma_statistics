@@ -51,6 +51,7 @@ from pharma_stats.triage import staging
 from pharma_stats.triage import validation as tval
 
 FAILURES_PATH = staging.STAGING_PATH.parent / "triage_failures.jsonl"
+LAYER3_CHUNK_SIZE = 20  # same as run_layer3_overflow.py — small enough for --max-spend to abort mid-run
 
 
 def _log_failure(program_id: str, name: str, error: Exception) -> None:
@@ -312,51 +313,92 @@ def cmd_pilot_or_full(args) -> None:
                   f"{n_flagged} candidate(s) flagged manual_overflow=True in the staging table (fix 3), "
                   "never auto-decided or dropped.")
         l3_payload = [{"program_id": c["program_id"], "name": c["name"]} for c in within_cap]
-        if l3_payload:
+        # Chunked, same as run_layer3_overflow.py — Layer 3 is the most
+        # expensive layer per candidate (flat $10/1000 search fee, output-
+        # heavy token cost), and --max-spend must actually be able to abort
+        # mid-run against real accumulated cost. Running the whole queue as
+        # one unchunked call (the previous behaviour) left --max-spend
+        # covering Layer 2 only, letting a real run land at $37.59 against
+        # a $5 cap — see the module docstring.
+        l3_chunks = [l3_payload[i:i + LAYER3_CHUNK_SIZE] for i in range(0, len(l3_payload), LAYER3_CHUNK_SIZE)]
+        for i, chunk in enumerate(l3_chunks):
+            if args.max_spend is not None and total_cost > args.max_spend:
+                n_not_run = sum(len(c) for c in l3_chunks[i:])
+                print(f"--max-spend ${args.max_spend:.2f} exceeded (spent ${total_cost:.2f}) — "
+                      f"stopping Layer 3 before chunk {i + 1}/{len(l3_chunks)}. "
+                      f"{n_not_run} candidate(s) not yet run this pass (still in the residue for a later run).")
+                break
             try:
-                answers, log = layer3.run_layer3(l3_payload, model=args.model)
+                answers, log = layer3.run_layer3(chunk, model=args.model)
             except model_client.ModelClientError as e:
-                for c in l3_payload:
+                for c in chunk:
                     _log_failure(c["program_id"], c["name"], e)
                     n_failed += 1
-                answers = {}
-            else:
-                n_l3_run = len(answers)
-                total_cost += log.get("usage", {}).get("cost_usd", 0.0)
-                for c in l3_payload:
-                    answer = answers.get(c["program_id"])
-                    if answer is None:
-                        continue
-                    try:
-                        tpool.assert_not_reviewed(c["program_id"])
-                    except tpool.PoolIntegrityError as e:
-                        _log_failure(c["program_id"], c["name"], e)
-                        n_failed += 1
-                        continue
-                    record = staging.build_record({
-                        "program_id": c["program_id"], "proposed_name": c["name"],
-                        "is_adc": answer.is_adc, "layer": 3,
-                        "model": args.model, "prompt_version": layer3.PROMPT_VERSION,
-                        "quote": answer.quote, "from_recall": False,
-                        "evidence_source": "text" if answer.quote else "no_usable_evidence",
-                    }, run_id=run_id)
-                    staging.append_record(record)
-                    n_staged += 1
+                continue
+            n_l3_run += len(answers)
+            chunk_cost = log.get("usage", {}).get("cost_usd", 0.0)
+            total_cost += chunk_cost
+            print(f"[layer3 chunk {i + 1}/{len(l3_chunks)}] {len(chunk)} candidate(s), "
+                  f"${chunk_cost:.4f}, running total ${total_cost:.2f}")
+            for c in chunk:
+                answer = answers.get(c["program_id"])
+                if answer is None:
+                    continue
+                try:
+                    tpool.assert_not_reviewed(c["program_id"])
+                except tpool.PoolIntegrityError as e:
+                    _log_failure(c["program_id"], c["name"], e)
+                    n_failed += 1
+                    continue
+                record = staging.build_record({
+                    "program_id": c["program_id"], "proposed_name": c["name"],
+                    "is_adc": answer.is_adc, "layer": 3,
+                    "model": args.model, "prompt_version": layer3.PROMPT_VERSION,
+                    "quote": answer.quote, "from_recall": False,
+                    "evidence_source": "text" if answer.quote else "no_usable_evidence",
+                }, run_id=run_id)
+                staging.append_record(record)
+                n_staged += 1
 
-        # Validation sample across ALL staged yes/no (pilot + this run), not
-        # just this run_id — otherwise the 80-sample would ignore the pilot.
-        latest = staging.latest_by_program(staging.load_records())
-        decisions = [
-            r for r in latest.values()
-            if r.get("is_adc") in ("yes", "no") and not r.get("manual_overflow")
-        ]
-        sample = tval.draw_stratified_sample(decisions)
-        tval.save_validation_sample(sample)
-        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        blind = REPORTS_DIR / "triage_validation_blind.html"
-        blind.write_text(trep.render_validation_blind_html(sample), encoding="utf-8")
-        print(f"Validation sample drawn: {len(sample)} candidate(s) -> {tval.VALIDATION_SAMPLE_PATH}")
-        print(f"Blind review page: {blind}")
+        # Validation sample: only drawn once, the first time this pipeline
+        # ever produces committable decisions. A sample already on disk is
+        # a live gate a human may be mid-judgment on (see
+        # scripts/promote_triage_decisions.py --check) — redrawing here
+        # would silently invalidate that in-progress work. draw_stratified_
+        # sample's original text/recall design is also known-infeasible on
+        # real data (draw_substitute_sample is what's actually used now),
+        # so calling it unconditionally would raise StratificationError and
+        # crash the run after real spend, before ever printing the totals
+        # below.
+        existing_sample = tval.load_validation_sample()
+        if existing_sample:
+            print(f"\nValidation sample already on file ({len(existing_sample)} candidate(s) at "
+                  f"{tval.VALIDATION_SAMPLE_PATH}) — not redrawn. Check its gate status with "
+                  "scripts/promote_triage_decisions.py --check.")
+        else:
+            latest = staging.latest_by_program(staging.load_records())
+            # decided_layer23_only excludes Layer 1/1.5 (apply.py stages
+            # those too, for the audit trail, even though they commit
+            # straight to gold) — assert_no_layer1 requires the caller to
+            # have already done this, not just trust internal filtering.
+            decisions = tval.decided_layer23_only(list(latest.values()))
+            try:
+                sample = tval.draw_stratified_sample(decisions, strict=True)
+            except tval.StratificationError as e:
+                # The original text/recall design is known-infeasible on
+                # real data (see triage/validation.py's module docstring) —
+                # fall back to the substitute design rather than crashing
+                # the run after real spend already happened.
+                print(f"\nOriginal validation design infeasible: {e}\n")
+                sample, info = tval.draw_substitute_sample(decisions)
+                print(f"Drew the substitute design instead: {info['main_cells']}, "
+                      f"appendix (no_usable_evidence) n={info['appendix_count']}")
+            tval.save_validation_sample(sample)
+            REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+            blind = REPORTS_DIR / "triage_validation_blind.html"
+            blind.write_text(trep.render_validation_blind_html(sample), encoding="utf-8")
+            print(f"Validation sample drawn: {len(sample)} candidate(s) -> {tval.VALIDATION_SAMPLE_PATH}")
+            print(f"Blind review page: {blind}")
         print(f"Layer 3 actually run: {n_l3_run} (queue was {len(layer3_queue)}; "
               f"this-run L2→L3 rate {n_l2_to_l3}/{n_l2 or 0} = "
               f"{(n_l2_to_l3 / n_l2) if n_l2 else 0:.0%} vs 43% pilot projection).")
@@ -400,7 +442,8 @@ def main() -> None:
     ap.add_argument("--review-page", action="store_true", help="Step D — blind HTML for the validation sample")
     ap.add_argument("--report", action="store_true", help="Step E — agreement report once the sample is judged")
     ap.add_argument("--limit", type=int, default=100, help="cap on with-text candidates entering Layer 2 (default 100)")
-    ap.add_argument("--max-spend", type=float, default=None, help="abort Layer 2 once exceeded; already-staged decisions are kept")
+    ap.add_argument("--max-spend", type=float, default=None,
+                     help="abort once total spend (Layer 2 + Layer 3) exceeds this; already-staged decisions are kept")
     ap.add_argument("--model", default=model_client.DEFAULT_MODEL)
     args = ap.parse_args()
 

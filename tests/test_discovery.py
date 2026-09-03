@@ -6,8 +6,10 @@ from datetime import date
 
 from pharma_stats.discovery.candidates import (
     Mention,
+    _pick_proposed_name,
     build_candidate_table,
     iter_pattern_matches,
+    strip_dosing_qualifiers,
 )
 from pharma_stats.discovery.patterns import (
     is_denylisted,
@@ -310,3 +312,30 @@ def test_pattern_match_iterator_emits_suffix_hits_and_skips_pre_2012():
     assert [m.nct_id for m in mentions] == ["NCT11111111"]
     assert mentions[0].match_strength == "suffix"
     assert mentions[0].intervention_name == "sacituzumab govitecan"
+
+
+def test_strip_dosing_qualifiers_parenthetical():
+    assert strip_dosing_qualifiers("Patritumab Deruxtecan (Up-Titration)") == "Patritumab Deruxtecan"
+    assert strip_dosing_qualifiers("Patritumab Deruxtecan (Fixed Dose)") == "Patritumab Deruxtecan"
+    assert strip_dosing_qualifiers("Drug X (Lyo-DP)") == "Drug X"
+
+
+def test_strip_dosing_qualifiers_trailing():
+    assert strip_dosing_qualifiers("Drug X for injection") == "Drug X"
+    assert strip_dosing_qualifiers("Drug X for infusion") == "Drug X"
+
+
+def test_strip_dosing_qualifiers_no_match_returns_unchanged():
+    assert strip_dosing_qualifiers("Trastuzumab Deruxtecan") == "Trastuzumab Deruxtecan"
+
+
+def test_pick_proposed_name_prefers_stripped_form_over_qualifier_bearing_original():
+    names = ["Patritumab Deruxtecan (Up-Titration)", "Patritumab Deruxtecan (Fixed Dose)", "HER3-DXd"]
+    assert _pick_proposed_name(names) == "Patritumab Deruxtecan"
+
+
+def test_pick_proposed_name_dedupes_after_stripping():
+    # both collapse to the same stripped form -- must not error or pick
+    # a qualifier-bearing name just because it appears "more often" pre-strip
+    names = ["Drug X for injection", "Drug X (Lyo-DP)"]
+    assert _pick_proposed_name(names) == "Drug X"

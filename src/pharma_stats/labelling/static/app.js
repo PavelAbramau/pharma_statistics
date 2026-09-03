@@ -39,6 +39,12 @@ async function refreshSessionStats() {
   $("gate2Count").textContent = s.gate2_rejected_count;
   $("queueCount").textContent = s.remaining_fresh_in_queue;
   $("medianSec").textContent = s.median_seconds_per_label ? s.median_seconds_per_label.toFixed(0) : "–";
+  if ($("mainQueueN")) $("mainQueueN").textContent = s.main_queue_remaining ?? "–";
+  if ($("valQueueN")) $("valQueueN").textContent = s.validation_queue_remaining ?? "–";
+  if ($("queueMainBtn") && $("queueValidationBtn")) {
+    $("queueMainBtn").classList.toggle("active", s.active_queue === "main");
+    $("queueValidationBtn").classList.toggle("active", s.active_queue === "validation");
+  }
   if ($("queueGate1")) $("queueGate1").textContent = s.queue_enter_gate1 ?? "–";
   if ($("queueGate3")) $("queueGate3").textContent = s.queue_enter_gate3 ?? "–";
   if ($("hoursLeft")) {
@@ -165,11 +171,19 @@ function renderProgram(p) {
     const isTyped = !!e.event_type;
     const directionBadge = e.direction
       ? `<span class="badge event-direction-${esc(e.direction)}">${esc(e.direction)}</span>` : "";
-    const typeBadge = isTyped ? `<span class="badge event-type">${esc(e.event_type)}</span>` : "";
+    const typeBadge = isTyped
+      ? `<span class="badge event-type event-type-${esc(e.event_type)}">${esc(e.event_type)}</span>` : "";
+    // Untyped amendments split two ways (diagnosed 2026-09-02): a purely
+    // cosmetic module change (e.g. Contacts/Locations) is a correctly-
+    // filtered non-event, dimmed and unbadged; a signal-relevant module
+    // with no typed event yet is a real gap worth a visible flag.
+    const kindBadge = e.amendment_kind === "not_yet_extracted"
+      ? `<span class="badge event-direction-increased">not yet extracted</span>` : "";
+    const dimClass = e.amendment_kind === "no_signal_modules_changed" ? " dim" : "";
     return `
-    <div class="timeline-item">
+    <div class="timeline-item${dimClass}">
       <div class="d">${esc(e.date || "?")}</div>
-      <div><b>${esc(e.nct_id)}</b> ${typeBadge}${directionBadge} — ${esc(e.label)} ${e.status ? statusPillHtml(e.status) : ""}
+      <div><b>${esc(e.nct_id)}</b> ${typeBadge}${directionBadge}${kindBadge} — ${esc(e.label)} ${e.status ? statusPillHtml(e.status) : ""}
         ${e.changed_modules ? `<div style="color:var(--muted);font-size:11px">${esc((e.changed_modules||[]).join(", "))}</div>` : ""}
       </div>
     </div>`;
@@ -593,6 +607,10 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") $("help").classList.remove("show");
     return;
   }
+  if ($("bulkReject").classList.contains("show")) {
+    if (e.key === "Escape" && !inField) closeBulkReject();
+    return;
+  }
 
   if (inField) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && state.gate === 3) { e.preventDefault(); submitLabel(3); }
@@ -647,6 +665,85 @@ $("skipBtn").addEventListener("click", () => submitSkip());
 $("blindCheckbox").addEventListener("change", (e) => setBlind(e.target.checked));
 $("helpBtn").addEventListener("click", () => $("help").classList.add("show"));
 $("helpClose").addEventListener("click", () => $("help").classList.remove("show"));
+
+// ---------- bulk reject ----------
+
+async function openBulkReject() {
+  $("bulkReject").classList.add("show");
+  $("bulkRejectErr").textContent = "";
+  const list = $("bulkRejectList");
+  list.innerHTML = `<div id="bulkRejectEmpty">loading…</div>`;
+  const r = await fetch("/api/bulk_reject_candidates?limit=60");
+  const data = await r.json();
+  const candidates = data.candidates || [];
+  if (!candidates.length) {
+    list.innerHTML = `<div id="bulkRejectEmpty">No likely-reject candidates in the queue right now.</div>`;
+    return;
+  }
+  list.innerHTML = candidates.map(c => `
+    <label class="brRow">
+      <input type="checkbox" class="brCheck" value="${c.program_id}">
+      <div>
+        <div class="brName">${c.proposed_name || c.program_id}</div>
+        <div class="brSnippet">${(c.signal_snippet || "").slice(0, 160)}</div>
+      </div>
+    </label>
+  `).join("");
+}
+
+function closeBulkReject() {
+  $("bulkReject").classList.remove("show");
+}
+
+async function submitBulkReject() {
+  const checked = Array.from(document.querySelectorAll(".brCheck:checked")).map(el => el.value);
+  const reason = $("bulkRejectReason").value.trim();
+  if (!checked.length) {
+    $("bulkRejectErr").textContent = "select at least one candidate";
+    return;
+  }
+  if (!reason) {
+    $("bulkRejectErr").textContent = "reason is required";
+    return;
+  }
+  const r = await fetch("/api/bulk_reject", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ program_ids: checked, reason }),
+  });
+  if (!r.ok) {
+    $("bulkRejectErr").textContent = "save failed — try again";
+    return;
+  }
+  const result = await r.json();
+  closeBulkReject();
+  $("bulkRejectReason").value = "";
+  await refreshSessionStats();
+  if (state.current && checked.includes(state.current.program.program_id)) {
+    await showNext();
+  }
+  console.log(`bulk reject: ${result.n_rejected} rejected, ${result.skipped.length} skipped`);
+}
+
+async function switchQueue(queueName) {
+  const r = await fetch("/api/switch_queue", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ queue: queueName }),
+  });
+  if (!r.ok) return;
+  await refreshSessionStats();
+  await showNext();
+}
+
+document.querySelectorAll("#queueSwitch span").forEach(el => {
+  el.addEventListener("click", () => switchQueue(el.dataset.queue));
+});
+
+$("bulkRejectBtn").addEventListener("click", openBulkReject);
+$("bulkRejectClose").addEventListener("click", closeBulkReject);
+$("bulkRejectSubmit").addEventListener("click", submitBulkReject);
+$("bulkRejectSelectAll").addEventListener("click", () => {
+  document.querySelectorAll(".brCheck").forEach(el => { el.checked = true; });
+});
 
 // Delegated: outbound links (PubMed / web search / CT.gov) are rendered
 // fresh into #programView on every program, so a single listener here

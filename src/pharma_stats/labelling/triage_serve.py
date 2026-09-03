@@ -82,8 +82,9 @@ def ingest_reopens(session: dict, known_ids: set[str], path: Optional[Path] = No
             continue
         queue.append(pid)
         already.add(pid)
-        if pid in session.get("order", []):
-            session["order"].remove(pid)
+        for list_key in ("order", "validation_order"):
+            if pid in session.get(list_key, []):
+                session[list_key].remove(pid)
     return accepted
 
 

@@ -12,13 +12,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import duckdb
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from pharma_stats.config import WAREHOUSE_DB
 from pharma_stats.labelling import provisional_programs as pp
 from pharma_stats.labelling import queue as q
+from pharma_stats.labelling import queue_order as qo
 from pharma_stats.labelling import stats as label_stats
 from pharma_stats.labelling import store
 from pharma_stats.labelling import trial_scope as ts
@@ -27,6 +30,8 @@ from pharma_stats.labelling.vocab import (
     APP_VERSION, CONFIDENCE_LEVELS, CONFIRMATION_EVIDENCE_TYPES, GATE2_SCOPE_OUT_REASONS,
     IN_SCOPE_VALUES, IS_ADC_VALUES, KILL_REASONS, PROGRAM_STATUSES, SCOPE_OUT_REASONS,
 )
+from pharma_stats.triage import evidence as tev
+from pharma_stats.triage import grounding
 from pharma_stats.triage import staging as triage_staging
 from pharma_stats.triage import validation as tval
 
@@ -224,7 +229,8 @@ def next_program(blind: bool = True):
         # requeued (a future backfill may fix them), so an unbounded loop
         # here could spin forever if nothing in the queue has full
         # coverage yet.
-        max_attempts = len(session["order"]) + len(reopen_queue) + len(fully_labelled) + 2
+        active_key = q._active_list_key(session)
+        max_attempts = len(session.get(active_key, [])) + len(reopen_queue) + len(fully_labelled) + 2
         for _ in range(max_attempts):
             serving_reopen = False
             if reopen_queue:
@@ -300,7 +306,10 @@ class LabelPayload(BaseModel):
     evidence_note: Optional[str] = None
     label_evidence_date: Optional[str] = None
     public_confirmation_date: Optional[str] = None
+    confirmation_evidence_type: Optional[str] = None
     never_publicly_confirmed: bool = False
+    third_party_first_noted_date: Optional[str] = None
+    third_party_source: Optional[str] = None
     blind: bool = True
     seconds_spent: Optional[float] = None
     status_revised_after_external_search: bool = False
@@ -387,6 +396,9 @@ def session_stats():
         return {
             "session_id": session["session_id"],
             "app_version": APP_VERSION,
+            "active_queue": session.get("active_queue", "main"),
+            "main_queue_remaining": len(session.get("order") or []),
+            "validation_queue_remaining": len(session.get("validation_order") or []),
             "total_programs": len(programs),
             # "labelled" means gate 3 only — triage rejections never count
             # toward this or the stratum/target numbers below.
@@ -405,6 +417,115 @@ def session_stats():
             "remaining_to_target": composition["remaining_to_target"],
             "gate3_target": composition["gate3_target"],
         }
+
+
+class SwitchQueuePayload(BaseModel):
+    queue: str  # "main" | "validation"
+
+
+@app.post("/api/switch_queue")
+def switch_queue(payload: SwitchQueuePayload):
+    with _lock:
+        session = _state["session"]
+        try:
+            q.switch_queue(session, payload.queue)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        q.save_session(session)
+        return {
+            "ok": True, "active_queue": session["active_queue"],
+            "main_queue_remaining": len(session.get("order") or []),
+            "validation_queue_remaining": len(session.get("validation_order") or []),
+        }
+
+
+@app.get("/api/bulk_reject_candidates")
+def bulk_reject_candidates(limit: int = 40):
+    """Likely-reject bucket only (see labelling/queue_order.py) — obvious
+    non-ADCs the disposition ordering already fast-tracks, offered here
+    for one-reason multi-select rejection instead of one card at a time.
+    Never includes a blind-holdout program_id."""
+    with _lock:
+        session = _state["session"]
+        records = store.load_records()
+        reviewed = store.reviewed_program_ids(records)
+        heme_auto_ok, _ = triage_serve.heme_only_auto_exclude_allowed(_state["programs"], records)
+        model_gate_ok, _ = triage_serve.model_layer_gate_passed(records)
+        staged = triage_staging.latest_by_program(triage_staging.load_records())
+        remaining_ids = list(session.get("reopen_queue") or []) + list(session.get("order") or [])
+        remaining_ids = [pid for pid in remaining_ids if pid not in reviewed]
+
+        con = duckdb.connect(str(WAREHOUSE_DB), read_only=True)
+        try:
+            candidates = qo.likely_reject_candidates(
+                _state["programs"], remaining_ids,
+                heme_auto_ok=heme_auto_ok, model_gate_ok=model_gate_ok,
+                heme_holdout_ids=_validation_sample_ids(), triage_holdout_ids=_triage_holdout_ids(),
+                staged_by_program=staged, con=con, limit=limit,
+            )
+        finally:
+            con.close()
+        return {"candidates": candidates}
+
+
+class BulkRejectPayload(BaseModel):
+    program_ids: list[str]
+    reason: str
+
+
+@app.post("/api/bulk_reject")
+def bulk_reject(payload: BulkRejectPayload):
+    """Gate-1 is_adc=no for every listed program_id, one shared reason.
+    decided_by=human — a person selected these, triage didn't — so this
+    is a normal gold record, not an auto-decision; the gate in
+    triage/promote.py is unrelated and unaffected."""
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(422, "reason is required")
+    if not payload.program_ids:
+        raise HTTPException(422, "program_ids must not be empty")
+
+    with _lock:
+        session = _state["session"]
+        records = store.load_records()
+        reviewed = store.reviewed_program_ids(records)
+        blind_ids = _validation_sample_ids() | _triage_holdout_ids()
+
+        accepted: list[str] = []
+        skipped: list[str] = []
+        for pid in payload.program_ids:
+            program = _state["programs_by_id"].get(pid)
+            if program is None or pid in reviewed or pid in blind_ids:
+                skipped.append(pid)
+                continue
+            body = {
+                "action": "label", "program_id": pid,
+                "candidate_id": program["candidate_id"], "proposed_name": program["proposed_name"],
+                "gate_reached": 1, "decided_by": "human", "is_adc": "no",
+                "evidence_note": reason,
+                "discovery_strategy": program.get("discovery_strategy"),
+                "match_strength": program.get("match_strength"),
+                "matched_term": program.get("matched_term"),
+                "blind": False,
+            }
+            try:
+                store.validate_label_payload(body)
+            except store.ValidationError:
+                skipped.append(pid)
+                continue
+            record = store.build_record(body, session_id=session["session_id"], served_stratum={})
+            store.append_record(record)
+            reviewed.add(pid)
+            accepted.append(pid)
+
+        rejected_set = set(accepted)
+        if rejected_set:
+            session["order"] = [pid for pid in session.get("order", []) if pid not in rejected_set]
+            if session.get("reopen_queue"):
+                session["reopen_queue"] = [pid for pid in session["reopen_queue"] if pid not in rejected_set]
+            q.save_session(session)
+
+        return {"ok": True, "n_rejected": len(accepted), "rejected": accepted, "skipped": skipped}
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

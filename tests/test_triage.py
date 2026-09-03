@@ -344,6 +344,24 @@ def test_run_layer3_parses_answers(monkeypatch):
     assert "cost_usd" in log["usage"]
 
 
+def test_run_layer3_log_tracks_web_search_flat_fee(monkeypatch):
+    from pharma_stats.triage import layer3
+
+    candidates = [{"program_id": "p1", "name": "Drug A"}]
+    monkeypatch.setattr(layer3.model_client, "submit_batch", lambda requests, model: "batch1")
+    monkeypatch.setattr(layer3.model_client, "poll_batch_until_done", lambda batch_id, **kw: {"processing_status": "ended"})
+    monkeypatch.setattr(layer3.model_client, "collect_batch_results", lambda batch_id, **kw: {
+        "l3_p1": (json.dumps({"is_adc": "no", "quote": "x", "source_url": "https://x"}),
+                  model_client.Usage(2000, 500, "claude-sonnet-4-6", web_search_requests=1)),
+    })
+
+    _, log = layer3.run_layer3(candidates)
+    assert log["usage"]["web_search_requests"] == 1
+    assert log["usage"]["web_search_flat_fee_usd"] == pytest.approx(model_client.WEB_SEARCH_COST_PER_1000 / 1000)
+    # the flat fee must be present in the total cost too, not just reported alongside it
+    assert log["usage"]["cost_usd"] >= log["usage"]["web_search_flat_fee_usd"]
+
+
 def test_run_layer3_refuses_to_exceed_cap(monkeypatch):
     from pharma_stats.triage import layer3
 
@@ -354,17 +372,17 @@ def test_run_layer3_refuses_to_exceed_cap(monkeypatch):
 
 # -------------------------------------------------------------- validation --
 
-def _decision(pid, is_adc, from_recall):
+def _decision(pid, is_adc, from_recall, *, layer=2, quote=None):
     return {"program_id": pid, "is_adc": is_adc, "in_scope": "no" if is_adc == "no" else None,
-            "from_recall": from_recall}
+            "from_recall": from_recall, "layer": layer, "quote": quote}
 
 
 def test_draw_stratified_sample_balances_four_strata():
     from pharma_stats.triage import validation as val
 
     decisions = (
-        [_decision(f"ta{i}", "yes", False) for i in range(10)]   # text/accept
-        + [_decision(f"tr{i}", "no", False) for i in range(10)]  # text/reject
+        [_decision(f"ta{i}", "yes", False, quote="an ADC") for i in range(10)]   # text/accept
+        + [_decision(f"tr{i}", "no", False, quote="an ADC") for i in range(10)]  # text/reject
         + [_decision(f"ra{i}", "yes", True) for i in range(10)]  # recall/accept
         + [_decision(f"rr{i}", "no", True) for i in range(10)]   # recall/reject
     )
@@ -373,20 +391,105 @@ def test_draw_stratified_sample_balances_four_strata():
     counts = Counter(val._stratum(d) for d in sample)
     assert len(sample) == 8
     assert all(n == 2 for n in counts.values())  # 8 // 4 = 2 per stratum
+    assert all(d.get("stratum") for d in sample)  # every kept item tagged with its cell
 
 
 def test_draw_stratified_sample_keeps_already_reserved():
     from pharma_stats.triage import validation as val
 
-    decisions = [_decision(f"p{i}", "yes", False) for i in range(20)]
-    sample = val.draw_stratified_sample(decisions, sample_size=4, seed=0, already_reserved={"p5"})
+    # single-cell input is infeasible by design (see the infeasibility
+    # test below) — strict=False here isolates the reservation-stability
+    # behaviour under test, not feasibility
+    decisions = [_decision(f"p{i}", "yes", False, quote="an ADC") for i in range(20)]
+    sample = val.draw_stratified_sample(decisions, sample_size=4, seed=0, already_reserved={"p5"}, strict=False)
     assert "p5" in {d["program_id"] for d in sample}
+
+
+def test_assert_no_layer1_raises():
+    from pharma_stats.triage import validation as val
+
+    decisions = [_decision("p1", "no", False, layer=1)]
+    with pytest.raises(val.StratificationError):
+        val.assert_no_layer1(decisions)
+    val.assert_no_layer1([_decision("p1", "no", False, layer=2)])  # fine
+
+
+def test_draw_stratified_sample_raises_when_real_bug_shape_is_infeasible():
+    """The actual bug: from_recall is False on every real staged record
+    (Layer 2 only stages grounded answers; Layer 3 never sets it even
+    when it found nothing) — so the recall stratum is empty. Must raise
+    loudly, not silently return a smaller sample."""
+    from pharma_stats.triage import validation as val
+
+    decisions = (
+        [_decision(f"a{i}", "yes", False, layer=2, quote="an ADC") for i in range(50)]
+        + [_decision(f"r{i}", "no", False, layer=2, quote="an ADC") for i in range(50)]
+    )
+    with pytest.raises(val.StratificationError, match="recall"):
+        val.draw_stratified_sample(decisions, sample_size=80, seed=0)
+
+
+def test_check_stratum_feasibility_reports_shortfalls_and_no_usable_evidence():
+    from pharma_stats.triage import validation as val
+
+    decisions = (
+        [_decision(f"a{i}", "yes", False, layer=2, quote="an ADC") for i in range(30)]
+        + [_decision(f"r{i}", "no", False, layer=3, quote="an ADC") for i in range(30)]
+        + [_decision(f"n{i}", "no", False, layer=3, quote=None) for i in range(5)]  # no_usable_evidence
+    )
+    report = val.check_stratum_feasibility(decisions, sample_size=80)
+    assert report["feasible"] is False
+    assert ("recall", "accept") not in report["availability"]  # not present at all -> shortfall
+    assert report["no_usable_evidence_count"] == 5
+
+
+def test_propose_substitute_stratification_is_feasible_on_realistic_data():
+    from pharma_stats.triage import validation as val
+
+    decisions = (
+        [_decision(f"l2a{i}", "yes", False, layer=2, quote="an ADC") for i in range(25)]
+        + [_decision(f"l2r{i}", "no", False, layer=2, quote="an ADC") for i in range(150)]
+        + [_decision(f"l3a{i}", "yes", False, layer=3, quote="an ADC per search") for i in range(50)]
+        + [_decision(f"l3r{i}", "no", False, layer=3, quote="an ADC per search") for i in range(90)]
+        + [_decision(f"l3n{i}", "no", False, layer=3, quote=None) for i in range(13)]
+    )
+    proposal = val.propose_substitute_stratification(decisions)
+    assert proposal["feasible"] is True
+    assert proposal["appendix_count"] == 13
+
+
+def test_draw_substitute_sample_fills_all_cells_and_appends_no_usable_evidence():
+    from pharma_stats.triage import validation as val
+    from collections import Counter
+
+    decisions = (
+        [_decision(f"l2a{i}", "yes", False, layer=2, quote="an ADC") for i in range(25)]
+        + [_decision(f"l2r{i}", "no", False, layer=2, quote="an ADC") for i in range(150)]
+        + [_decision(f"l3a{i}", "yes", False, layer=3, quote="an ADC per search") for i in range(50)]
+        + [_decision(f"l3r{i}", "no", False, layer=3, quote="an ADC per search") for i in range(90)]
+        + [_decision(f"l3n{i}", "no", False, layer=3, quote=None) for i in range(13)]
+    )
+    sample, info = val.draw_substitute_sample(decisions, sample_size=80, seed=0)
+    main = [d for d in sample if d["stratum"] != "no_usable_evidence/appendix"]
+    appendix = [d for d in sample if d["stratum"] == "no_usable_evidence/appendix"]
+    assert len(main) == 80
+    counts = Counter(d["stratum"] for d in main)
+    assert all(n == 20 for n in counts.values())
+    assert len(appendix) == 13  # all included, not dropped, not counted toward the 80
+
+
+def test_draw_substitute_sample_raises_when_even_that_is_infeasible():
+    from pharma_stats.triage import validation as val
+
+    decisions = [_decision(f"p{i}", "no", False, layer=2, quote="an ADC") for i in range(5)]
+    with pytest.raises(val.StratificationError):
+        val.draw_substitute_sample(decisions, sample_size=80, seed=0)
 
 
 def test_compute_agreement_excludes_unreviewed_programs(monkeypatch):
     from pharma_stats.triage import validation as val
 
-    sample = [_decision("p1", "yes", False), _decision("p2", "no", False)]
+    sample = [_decision("p1", "yes", False, quote="an ADC"), _decision("p2", "no", False, quote="an ADC")]
     gold_records = [{
         "action": "label", "program_id": "p1", "gate_reached": 1, "is_adc": "yes",
         "timestamp": "2026-01-01", "is_repeat_probe": False,

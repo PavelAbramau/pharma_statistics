@@ -29,6 +29,15 @@ EVENT_TYPES = [
     "primary_outcome_added",
     "primary_outcome_removed",
     "primary_outcome_changed",
+    # A date/enrollment field reverting ACTUAL -> ESTIMATED — a trial
+    # un-finalizing an outcome it had already reported as fact. Real
+    # example: NCT03260491 reverted then resumed recruiting with a new
+    # cohort. Previously folded into *_finalized with direction=None
+    # ("type reverted... unusual, not treated as a plan change"), which
+    # buried a strong positive liveness signal as an oddity indistinguishable
+    # from the ESTIMATED->ACTUAL case. See diff.py's _diff_dated_field /
+    # _diff_enrollment.
+    "trial_reopened",
 ]
 
 DIRECTIONS = {"increased", "decreased", "pushed_later", "pulled_earlier", "finalized", None}

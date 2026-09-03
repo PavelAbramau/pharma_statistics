@@ -51,6 +51,18 @@ PRICING_PER_MILLION_TOKENS = {
 }
 BATCH_DISCOUNT = 0.5
 
+# Web search is billed SEPARATELY from token usage: $10 per 1,000 searches,
+# regardless of result count, PLUS standard token cost for whatever
+# content it puts in context. Verified live 2026-09-01 against
+# https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+# — "priced the same as those in regular Messages API requests" even
+# through the Batch API, so this fee does NOT get BATCH_DISCOUNT applied,
+# unlike token costs. This was missing entirely from cost estimates before
+# — a real, confirmed contributor to a past $32.83-actual-vs-$1.28-
+# estimated run: 400 searches alone is $4.00 in flat fees never accounted
+# for, on top of the token-side underestimate.
+WEB_SEARCH_COST_PER_1000 = 10.00
+
 # SDK client resilience — a longer connect timeout and more retries than
 # the SDK default (10 min / max_retries=2), so a transient network hiccup
 # doesn't take down a run spanning hours. See module docstring.
@@ -63,9 +75,13 @@ class Usage(NamedTuple):
     input_tokens: int
     output_tokens: int
     model: str
+    web_search_requests: int = 0
 
-    def cost_usd(self) -> float:
-        return estimate_cost(self.input_tokens, self.output_tokens, self.model)
+    def cost_usd(self, *, batch: bool = False) -> float:
+        return estimate_cost(
+            self.input_tokens, self.output_tokens, self.model,
+            batch=batch, web_search_requests=self.web_search_requests,
+        )
 
 
 class ModelClientError(RuntimeError):
@@ -90,15 +106,21 @@ def _client():
     )
 
 
-def estimate_cost(input_tokens: int, output_tokens: int, model: str, *, batch: bool = False) -> float:
+def estimate_cost(
+    input_tokens: int, output_tokens: int, model: str, *, batch: bool = False,
+    web_search_requests: int = 0,
+) -> float:
     if model not in PRICING_PER_MILLION_TOKENS:
         raise ModelClientError(
             f"no pricing on file for model {model!r} — add it to "
             f"model_client.PRICING_PER_MILLION_TOKENS before estimating cost for it"
         )
     rates = PRICING_PER_MILLION_TOKENS[model]
-    cost = (input_tokens / 1_000_000) * rates["input"] + (output_tokens / 1_000_000) * rates["output"]
-    return cost * BATCH_DISCOUNT if batch else cost
+    token_cost = (input_tokens / 1_000_000) * rates["input"] + (output_tokens / 1_000_000) * rates["output"]
+    token_cost = token_cost * BATCH_DISCOUNT if batch else token_cost
+    # NOT discounted by batch — see WEB_SEARCH_COST_PER_1000's comment.
+    search_cost = (web_search_requests / 1000) * WEB_SEARCH_COST_PER_1000
+    return token_cost + search_cost
 
 
 def count_tokens(prompt: str, *, system: Optional[str] = None, model: str = DEFAULT_MODEL) -> int:
@@ -150,8 +172,18 @@ def complete(
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
         model=model,
+        web_search_requests=_web_search_requests(response.usage),
     )
     return text, usage
+
+
+def _web_search_requests(usage) -> int:
+    """response.usage.server_tool_use.web_search_requests, defensively —
+    absent entirely on a response that used no server tools. See
+    WEB_SEARCH_COST_PER_1000: this count drives a real, separately-billed
+    flat fee that token counts alone say nothing about."""
+    server_tool_use = getattr(usage, "server_tool_use", None)
+    return getattr(server_tool_use, "web_search_requests", 0) or 0
 
 
 def submit_batch(requests: list[dict], *, model: str = DEFAULT_MODEL) -> str:
@@ -231,7 +263,10 @@ def collect_batch_results(batch_id: str, *, model: str = DEFAULT_MODEL) -> dict:
         if result.result.type == "succeeded":
             msg = result.result.message
             text = "".join(b.text for b in msg.content if b.type == "text")
-            usage = Usage(input_tokens=msg.usage.input_tokens, output_tokens=msg.usage.output_tokens, model=model)
+            usage = Usage(
+                input_tokens=msg.usage.input_tokens, output_tokens=msg.usage.output_tokens, model=model,
+                web_search_requests=_web_search_requests(msg.usage),
+            )
             out[result.custom_id] = (text, usage)
     return out
 

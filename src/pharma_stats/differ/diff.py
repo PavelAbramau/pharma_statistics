@@ -84,14 +84,16 @@ def _diff_dated_field(
                 detail=f"{field_name} finalized: estimated {prev_struct.get('date')} -> "
                        f"actual {curr_struct.get('date')}",
             )]
-        # ACTUAL -> ESTIMATED (or other non-forward transition): rare, don't
-        # claim a "pushed" direction across a type change either way.
+        # ACTUAL -> ESTIMATED (or other non-forward transition): the trial
+        # un-finalized a date it had already reported as fact — a real
+        # positive liveness signal (the trial reopened/resumed), not a
+        # plan-change direction to claim either way.
         return [EvidenceEvent(
             nct_id=nct_id, from_version=fv, to_version=tv, event_date=event_date,
-            event_type=f"{field_name}_finalized", field=field_name, direction=None,
+            event_type="trial_reopened", field=field_name, direction=None,
             from_value=prev_struct.get("date"), to_value=curr_struct.get("date"),
-            detail=f"{field_name} type reverted: {prev_type} {prev_struct.get('date')} -> "
-                   f"{curr_type} {curr_struct.get('date')} (unusual — not treated as a plan change)",
+            detail=f"{field_name} reverted from actual to estimated: {prev_type} {prev_struct.get('date')} -> "
+                   f"{curr_type} {curr_struct.get('date')} — trial likely reopened/resumed",
         )]
 
     if prev_date == curr_date:
@@ -125,10 +127,10 @@ def _diff_enrollment(nct_id, fv, tv, event_date, prev: Optional[dict], curr: Opt
             )]
         return [EvidenceEvent(
             nct_id=nct_id, from_version=fv, to_version=tv, event_date=event_date,
-            event_type="enrollment_finalized", field="enrollment", direction=None,
+            event_type="trial_reopened", field="enrollment", direction=None,
             from_value=prev_count, to_value=curr_count,
-            detail=f"enrollment type reverted: {prev_type} {prev_count} -> {curr_type} {curr_count} "
-                   "(unusual — not treated as a plan change)",
+            detail=f"enrollment reverted from actual to estimated: {prev_type} {prev_count} -> "
+                   f"{curr_type} {curr_count} — trial likely reopened/resumed",
         )]
 
     if prev_count == curr_count:

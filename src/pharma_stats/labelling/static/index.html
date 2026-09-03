@@ -38,6 +38,7 @@
   .badge.event-direction-decreased, .badge.event-direction-pulled_earlier { color: var(--bad); border-color: var(--bad); }
   .badge.event-direction-increased, .badge.event-direction-pushed_later { color: var(--warn); border-color: var(--warn); }
   .badge.event-direction-finalized { color: var(--good); border-color: var(--good); }
+  .badge.event-type-trial_reopened { color: var(--good); border-color: var(--good); font-weight: 700; }
   .badge.coverage-full { color: var(--good); border-color: var(--good); }
   .badge.coverage-partial { color: var(--warn); border-color: var(--warn); }
   .badge.coverage-none { color: var(--bad); border-color: var(--bad); }
@@ -59,6 +60,7 @@
   .timeline-item { display: grid; grid-template-columns: 90px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 12.5px; }
   .timeline-item:last-child { border-bottom: none; }
   .timeline-item .d { color: var(--muted); font-family: var(--mono); }
+  .timeline-item.dim { opacity: .45; }
 
   .links a { display: block; margin-bottom: 4px; }
 
@@ -102,6 +104,23 @@
   section.card.triage-banner h2 { color: var(--warn); }
   section.card.reopen-banner { border-color: var(--accent); }
   #triageOverride { margin-top: 8px; font-size: 12px; }
+
+  #bulkRejectBtn { cursor: pointer; border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; }
+  #queueSwitch { display: flex; gap: 4px; }
+  #queueSwitch span { cursor: pointer; border: 1px solid var(--border); border-radius: 4px; padding: 1px 7px; }
+  #queueSwitch span.active { color: var(--accent); border-color: var(--accent); }
+  #bulkReject { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #bulkReject.show { display: flex; }
+  #bulkReject .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px 26px; width: 560px; max-height: 80vh; display: flex; flex-direction: column; }
+  #bulkRejectList { overflow-y: auto; flex: 1; margin: 12px 0; border: 1px solid var(--border); border-radius: 6px; }
+  .brRow { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .brRow:last-child { border-bottom: none; }
+  .brRow input[type=checkbox] { margin-top: 2px; accent-color: var(--accent); }
+  .brRow .brName { font-weight: 600; }
+  .brRow .brSnippet { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  #bulkRejectEmpty { padding: 14px; color: var(--muted); font-size: 12.5px; }
+  #bulkRejectBar { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+  #bulkRejectReason { flex: 1; }
 </style>
 </head>
 <body>
@@ -110,12 +129,17 @@
   <span><b id="labelledCount">–</b> / <span id="totalCount">–</span> labelled (gate 3)</span>
   <span title="triage rejections — never count toward the label target">gate1 <b id="gate1Count">–</b> / gate2 <b id="gate2Count">–</b> rejected</span>
   <span><b id="queueCount">–</b> in fresh queue</span>
+  <span id="queueSwitch">
+    <span id="queueMainBtn" data-queue="main">main (<b id="mainQueueN">–</b>)</span>
+    <span id="queueValidationBtn" data-queue="validation">validation (<b id="valQueueN">–</b>)</span>
+  </span>
   <span>G1 <b id="queueGate1">–</b> / G3 <b id="queueGate3">–</b> entry</span>
   <span>~<b id="hoursLeft">–</b>h to 100 labels</span>
   <span>median <b id="medianSec">–</b>s/label</span>
   <span id="timer">0.0s</span>
   <span class="spacer"></span>
   <label id="blindToggle" class="on"><input type="checkbox" id="blindCheckbox" checked> Blind mode (Alt+B)</label>
+  <span id="bulkRejectBtn">bulk reject</span>
   <span id="helpBtn">? shortcuts</span>
 </div>
 <div id="topbar2" style="display:flex; gap:18px; padding:4px 16px 8px; background:var(--panel); border-bottom:1px solid var(--border); font-size:11.5px; color:var(--muted); flex-wrap:wrap">
@@ -214,6 +238,23 @@
     <table id="revealBreakdown"></table>
     <div style="margin-top:10px;color:var(--muted);font-size:12px">Archetypes: <span id="revealArchetypes"></span></div>
     <div style="margin-top:16px;text-align:right"><button class="secondary" id="revealClose">Continue (any key)</button></div>
+  </div>
+</div>
+
+<div id="bulkReject">
+  <div class="box">
+    <h3>Bulk reject — obvious non-ADCs</h3>
+    <div style="color:var(--muted); font-size:12px">Small-molecule / oral-administration signal, from the same evidence text triage uses. Check what applies, give one reason, reject them all at once.</div>
+    <div id="bulkRejectList"></div>
+    <div id="bulkRejectBar">
+      <input type="text" id="bulkRejectReason" placeholder="Reason (e.g. oral small molecule)">
+      <button class="secondary" id="bulkRejectSelectAll">select all</button>
+    </div>
+    <div id="bulkRejectErr" style="color:var(--bad); font-size:12px; min-height:1em; margin-top:6px"></div>
+    <div class="actions" style="margin-top:10px">
+      <button class="secondary" id="bulkRejectClose">Close</button>
+      <button class="primary" id="bulkRejectSubmit">Reject selected</button>
+    </div>
   </div>
 </div>
 

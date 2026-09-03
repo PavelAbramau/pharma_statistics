@@ -278,6 +278,41 @@ class CandidateAsset:
     review_status: str = "unreviewed"
 
 
+# Dosing/formulation qualifiers describe HOW a compound is dosed or
+# packaged, not WHICH compound it is — e.g. "Patritumab Deruxtecan
+# (Up-Titration)" and "Patritumab Deruxtecan (Fixed Dose)" are the same
+# canonical compound. Stripped before scoring so the canonical name never
+# carries one, rather than just being tie-broken against carrying one.
+# Reviewable, hand-built list — same convention as patterns.py's term
+# lists — extend by hand as new qualifier phrasings are noticed.
+_DOSING_QUALIFIER_TERMS = [
+    "up-titration", "up titration",
+    "fixed dose", "fixed-dose",
+    "lyo-dp", "lyo dp",
+    "for injection", "for infusion", "for intravenous use",
+]
+_PAREN_QUALIFIER_RE = re.compile(
+    r"\s*\((?:" + "|".join(re.escape(t) for t in _DOSING_QUALIFIER_TERMS) + r")\)\s*",
+    re.IGNORECASE,
+)
+_TRAILING_QUALIFIER_RE = re.compile(
+    r"\s+(?:" + "|".join(re.escape(t) for t in _DOSING_QUALIFIER_TERMS) + r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_dosing_qualifiers(name: str) -> str:
+    """The name with any known dosing/formulation qualifier removed
+    (parenthetical or trailing), whitespace-collapsed. Returns the
+    original name unchanged if nothing matches — never returns an empty
+    string for a non-empty input (falls back to the original if
+    stripping would leave nothing)."""
+    stripped = _PAREN_QUALIFIER_RE.sub(" ", name)
+    stripped = _TRAILING_QUALIFIER_RE.sub("", stripped)
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return stripped or name
+
+
 def _pick_proposed_name(raw_names: list[str]) -> str:
     """Pick the cleanest generic-looking name from a synonym cluster.
 
@@ -287,6 +322,18 @@ def _pick_proposed_name(raw_names: list[str]) -> str:
     which..."). Longest-name-wins would pick that; INN-style generic
     names are typically 1-4 words, so we score for closeness to that
     length instead of raw length.
+
+    Dosing/formulation qualifiers (up-titration, fixed dose, lyo-DP, for
+    injection/infusion) are stripped from the WINNER only, as a final
+    step — not from the whole pool before scoring. Scoring the stripped
+    pool was tried and reverted: shortening a name to 1-2 words before
+    scoring makes it lose the "closeness to 3 words" heuristic to
+    unrelated messier variants (e.g. a real cluster where stripping
+    "RC108 for injection" down to "RC108" made it lose to a garbled
+    "RC108 For Injection；" variant that coincidentally has 3 tokens).
+    Stripping only the already-chosen winner can't affect which name
+    wins among genuinely different candidates — it can only shorten the
+    final pick.
     """
     def score(n: str) -> tuple:
         suffix_hit = matches_pattern(n)
@@ -300,7 +347,8 @@ def _pick_proposed_name(raw_names: list[str]) -> str:
         closeness_to_inn_length = -abs(word_count - 3)
         return (has_suffix, combo_penalty, closeness_to_inn_length, -len(n))
 
-    return max(raw_names, key=score)
+    winner = max(raw_names, key=score)
+    return strip_dosing_qualifiers(winner)
 
 
 # Class-descriptor phrases (from patterns.LITERAL_TERMS) name a *modality*,

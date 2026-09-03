@@ -214,6 +214,7 @@ def test_gold_set_reports_status_revision_rate(tmp_path, monkeypatch):
 
 def test_label_sufficiency_reports_insufficient_data(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "LABELS_PATH", tmp_path / "labels.jsonl")
+    monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: [])
     checks = label_sufficiency.run()
     assert checks[0].level == "INFO"
     assert "0 usable" in checks[0].actual
@@ -225,6 +226,7 @@ def test_label_sufficiency_ignores_gate1_and_gate2_rejections(tmp_path, monkeypa
     labels with dates."""
     gold_path = tmp_path / "labels.jsonl"
     monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: [])
 
     for i in range(15):
         rec = {
@@ -242,9 +244,18 @@ def test_label_sufficiency_ignores_gate1_and_gate2_rejections(tmp_path, monkeypa
     assert "0 usable" in checks[0].actual  # 15 gate-1 rejections, 0 real labels
 
 
+def _sponsor_programs(sponsor_by_pid: dict[str, str]) -> list[dict]:
+    return [
+        {"program_id": pid, "sponsors_over_time": [{"sponsor": sponsor, "last_seen": "2026-01-01"}]}
+        for pid, sponsor in sponsor_by_pid.items()
+    ]
+
+
 def test_label_sufficiency_bootstraps_with_enough_data(tmp_path, monkeypatch):
     gold_path = tmp_path / "labels.jsonl"
     monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    sponsors = {f"p{i}": f"Sponsor{i}" for i in range(15)}  # 15 distinct sponsors, no clustering
+    monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: _sponsor_programs(sponsors))
 
     for i in range(15):
         rec = {
@@ -261,6 +272,54 @@ def test_label_sufficiency_bootstraps_with_enough_data(tmp_path, monkeypatch):
     assert len(checks) == 1
     assert checks[0].level in ("INFO", "PASS")
     assert "N=15" in checks[0].actual
+    assert "15 distinct sponsors" in checks[0].actual
+
+
+def test_label_sufficiency_cluster_bootstrap_widens_ci_under_sponsor_correlation(tmp_path, monkeypatch):
+    """The whole point of the fix: when lead times are driven by sponsor
+    (every program from the same sponsor reports an identical lead time,
+    an extreme stand-in for ICC=0.18's real correlation), a naive
+    per-observation bootstrap would treat 20 correlated observations as
+    20 independent ones and report a falsely narrow CI. The sponsor
+    cluster bootstrap must not collapse to ~0 width just because there
+    are many labels — only 2 real sponsors' worth of information here."""
+    gold_path = tmp_path / "labels.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+
+    # 20 programs, but only 2 distinct sponsors -- Sponsor A always at
+    # 30 days, Sponsor B always at 300 days. A naive bootstrap over 20
+    # "independent" points would report a tight CI around the ~165d
+    # mean; the true uncertainty is "which of two sponsors dominates the
+    # draw," which is much wider.
+    sponsors = {}
+    for i in range(20):
+        sponsor = "SponsorA" if i % 2 == 0 else "SponsorB"
+        sponsors[f"p{i}"] = sponsor
+        lead_days = 30 if sponsor == "SponsorA" else 300
+        confirmation = date(2024, 1, 1)
+        from datetime import timedelta
+        rec = {
+            "event_id": f"e{i}", "timestamp": f"2026-01-{i+1:02d}T00:00:00+00:00", "action": "label",
+            "gate_reached": 3, "is_adc": "yes", "in_scope": "yes",
+            "program_id": f"p{i}", "status": "dead_confirmed", "kill_reason": "futility_efficacy",
+            "confidence": "high", "evidence_note": "",
+            "label_evidence_date": confirmation.isoformat(),
+            "public_confirmation_date": (confirmation + timedelta(days=lead_days)).isoformat(),
+            "never_publicly_confirmed": False,
+            "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
+        }
+        store.append_record(rec, path=gold_path)
+    monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: _sponsor_programs(sponsors))
+
+    checks = label_sufficiency.run()
+    assert "2 distinct sponsors" in checks[0].actual
+    # With only 2 clusters, the bootstrap can only ever draw {A,A}, {A,B},
+    # {B,A}, or {B,B} -- half the resamples land on a pure-sponsor mean
+    # (30d or 300d), so the 95% CI must span a large fraction of the
+    # 30-300 range, nowhere near the ~0d a naive 20-observation bootstrap
+    # would report for data this internally consistent.
+    width_str = checks[0].actual.split("width=")[1].split("d")[0]
+    assert float(width_str) > 100.0
 
 
 def test_cli_exits_nonzero_on_fail(tmp_path, monkeypatch, capsys):

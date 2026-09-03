@@ -138,6 +138,26 @@ def quote_grounds_no(quote: Optional[str]) -> bool:
     return False
 
 
+def matching_small_molecule_or_oral_snippet(text_snippets: Optional[list]) -> Optional[str]:
+    """First evidence snippet naming a non-ADC modality or an oral/tablet/
+    capsule route — the same signals quote_grounds_no checks a single
+    quote against, applied here across a candidate's whole evidence
+    bundle to flag likely-reject candidates for queue ordering (see
+    labelling/queue_order.py) and to show the reviewer why in the bulk-
+    reject panel. None if nothing matches — never used to decide
+    anything on its own."""
+    for snippet in text_snippets or []:
+        if not snippet:
+            continue
+        if _NO_ROA_RE.search(snippet) or _NO_MODALITY_RE.search(snippet):
+            return snippet
+    return None
+
+
+def has_small_molecule_or_oral_signal(text_snippets: Optional[list]) -> bool:
+    return matching_small_molecule_or_oral_snippet(text_snippets) is not None
+
+
 def evidence_source(is_adc: str, from_recall: bool, quote: Optional[str]) -> str:
     """text / recall / no_usable_evidence. Unsure + empty quote + not
     recall is neither text nor recall — the previous default-to-text

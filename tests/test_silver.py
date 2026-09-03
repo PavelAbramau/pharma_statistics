@@ -28,6 +28,29 @@ def _usage(input_tokens: int = 100, output_tokens: int = 20, model: str = model_
     return model_client.Usage(input_tokens=input_tokens, output_tokens=output_tokens, model=model)
 
 
+# ------------------------------------------------------- model_client cost --
+
+def test_estimate_cost_web_search_flat_fee_not_batch_discounted():
+    # token cost IS discounted 50% in batch; the $10/1000-search fee is not
+    token_only = model_client.estimate_cost(1_000_000, 0, model_client.DEFAULT_MODEL, batch=True)
+    with_search = model_client.estimate_cost(
+        1_000_000, 0, model_client.DEFAULT_MODEL, batch=True, web_search_requests=1000,
+    )
+    assert with_search - token_only == pytest.approx(model_client.WEB_SEARCH_COST_PER_1000)
+
+
+def test_usage_cost_usd_includes_web_search_requests():
+    usage = model_client.Usage(
+        input_tokens=0, output_tokens=0, model=model_client.DEFAULT_MODEL, web_search_requests=1,
+    )
+    assert usage.cost_usd() == pytest.approx(model_client.WEB_SEARCH_COST_PER_1000 / 1000)
+
+
+def test_usage_web_search_requests_defaults_to_zero_for_non_search_calls():
+    usage = model_client.Usage(input_tokens=100, output_tokens=20, model=model_client.DEFAULT_MODEL)
+    assert usage.web_search_requests == 0
+
+
 # ---------------------------------------------------------- gold/silver isolation --
 
 def test_silver_and_gold_paths_are_structurally_different():

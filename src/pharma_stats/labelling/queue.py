@@ -74,10 +74,25 @@ def new_session(programs: list[dict], exclude_ids: set[str]) -> dict:
         "session_id": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "order": build_stratified_order(programs, exclude_ids),
+        "validation_order": [],
+        "active_queue": "main",
         "total_served": 0,
         "pending_serve": {},
         "served_log": [],
     }
+
+
+def _active_list_key(session: dict) -> str:
+    """"order" or "validation_order" — old sessions predate active_queue,
+    so missing/unrecognized values default to "main" rather than erroring."""
+    return "validation_order" if session.get("active_queue") == "validation" else "order"
+
+
+def switch_queue(session: dict, queue_name: str) -> None:
+    if queue_name not in ("main", "validation"):
+        raise ValueError(f"unknown queue {queue_name!r} — must be 'main' or 'validation'")
+    session["active_queue"] = queue_name
+    session.setdefault("validation_order", [])
 
 
 def load_session(path: Optional[Path] = None) -> Optional[dict]:
@@ -98,9 +113,15 @@ def save_session(session: dict, path: Optional[Path] = None) -> None:
 
 def pop_next(session: dict, labelled_ids: set[str]) -> tuple[Optional[str], bool]:
     """Returns (program_id, is_repeat_probe). program_id is None if the
-    fresh queue is exhausted and no repeat is due."""
+    active queue is exhausted and no repeat is due. Repeat probes
+    (self-consistency re-serves) only ever fire on the main queue — the
+    validation queue is its own, separate agreement check against
+    triage's staged verdict, not a self-consistency mechanism."""
+    active_key = _active_list_key(session)
     total = session["total_served"]
-    is_repeat = total > 0 and (total + 1) % REPEAT_PROBE_EVERY == 0
+    is_repeat = (
+        active_key == "order" and total > 0 and (total + 1) % REPEAT_PROBE_EVERY == 0
+    )
     program_id = None
 
     if is_repeat and labelled_ids:
@@ -110,8 +131,9 @@ def pop_next(session: dict, labelled_ids: set[str]) -> tuple[Optional[str], bool
         session["_last_repeat_id"] = program_id
     else:
         is_repeat = False
-        if session["order"]:
-            program_id = session["order"].pop(0)
+        active_list = session.setdefault(active_key, [])
+        if active_list:
+            program_id = active_list.pop(0)
 
     if program_id is not None:
         session["total_served"] = total + 1
@@ -137,6 +159,6 @@ def make_serve_token(
 
 
 def requeue(session: dict, program_id: str) -> None:
-    """'Skip, come back to this' — put it back at the end of the fresh
+    """'Skip, come back to this' — put it back at the end of the active
     queue rather than discarding it."""
-    session["order"].append(program_id)
+    session.setdefault(_active_list_key(session), []).append(program_id)

@@ -1,7 +1,4 @@
 {
-  "program_ids": [
-    "cand_ad77890d80_recombinant_all_human_anti_nec",
-    "cand_e1586f75cb_the_usage_of_olverembatinib_co"
-  ],
+  "program_ids": [],
   "reason": "Re-decision requested: BAT8007 is a real Nectin-4/exatecan ADC (latest gold is_adc=no); Inotuzumab Ozogamicin is a B-cell ALL asset (latest gold in_scope=yes)."
 }

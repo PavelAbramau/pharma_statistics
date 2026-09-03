@@ -161,6 +161,32 @@ def test_no_pushed_or_changed_event_ever_spans_an_estimated_actual_boundary():
             )
 
 
+def test_actual_to_estimated_date_reversion_emits_trial_reopened():
+    prev = _study(primary_completion=("2024-05-15", "ACTUAL"), completion=("2024-09-20", "ACTUAL"))
+    curr = _study(primary_completion=("2025-01-01", "ESTIMATED"), completion=("2025-06-01", "ESTIMATED"))
+    events = diff_versions("NCT1", 1, 2, prev, curr, EVENT_DATE)
+    reopened = [e for e in events if e.event_type == "trial_reopened"]
+    assert len(reopened) == 2  # primary_completion_date and completion_date both reverted
+    assert {e.field for e in reopened} == {"primary_completion_date", "completion_date"}
+    assert all(e.direction is None for e in reopened)
+    # must NOT also fire under the old *_finalized event type for this direction
+    assert not any(e.event_type.endswith("_finalized") for e in reopened)
+
+
+def test_enrollment_actual_to_estimated_reversion_emits_trial_reopened():
+    prev = _study(enrollment_count=500, enrollment_type="ACTUAL")
+    curr = _study(enrollment_count=650, enrollment_type="ESTIMATED")
+    events = diff_versions("NCT1", 1, 2, prev, curr, EVENT_DATE)
+    reopened = [e for e in events if e.event_type == "trial_reopened" and e.field == "enrollment"]
+    assert len(reopened) == 1
+    assert reopened[0].from_value == 500
+    assert reopened[0].to_value == 650
+
+
+def test_trial_reopened_is_in_event_types():
+    assert "trial_reopened" in EVENT_TYPES
+
+
 def test_event_date_is_always_the_passed_in_knowability_date():
     """diff_versions must never invent its own date from the study bodies
     (e.g. lastUpdateSubmitDate) — event_date is whatever the caller

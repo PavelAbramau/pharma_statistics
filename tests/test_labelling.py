@@ -248,6 +248,38 @@ def test_compute_silence_score_status_ambiguity_aggregates_across_all_trials():
     assert breakdown["status_ambiguity"] == pp.STATUS_AMBIGUITY_WEIGHT  # max subscore (UNKNOWN) = 1.0
 
 
+def test_contacts_locations_amendment_cadence_zero_with_no_such_amendments():
+    t = _trial("RECRUITING", history=[{"version": 1, "posted_date": "2020-01-01",
+                                        "status": "RECRUITING", "changed_modules": ["Study Status"]}])
+    assert pp.contacts_locations_amendment_cadence([t], as_of=date(2026, 8, 19)) == 0.0
+
+
+def test_contacts_locations_amendment_cadence_counts_only_that_module():
+    t = _trial("RECRUITING", history=[
+        {"version": 1, "posted_date": "2024-08-19", "status": "RECRUITING", "changed_modules": ["Contacts/Locations"]},
+        {"version": 2, "posted_date": "2025-08-19", "status": "RECRUITING", "changed_modules": ["Study Status"]},
+    ])
+    # only 1 Contacts/Locations amendment, first at 2024-08-19, as_of exactly
+    # 2 years later -> 1 amendment / 2 years = 0.5/year
+    cadence = pp.contacts_locations_amendment_cadence([t], as_of=date(2026, 8, 19))
+    assert cadence == pytest.approx(0.5, rel=0.01)
+
+
+def test_contacts_locations_amendment_cadence_aggregates_across_trials():
+    t1 = _trial("RECRUITING", nct_id="NCT_A", history=[
+        {"version": 1, "posted_date": "2024-08-19", "status": "RECRUITING", "changed_modules": ["Contacts/Locations"]},
+    ])
+    t2 = _trial("RECRUITING", nct_id="NCT_B", history=[
+        {"version": 1, "posted_date": "2024-08-19", "status": "RECRUITING", "changed_modules": ["Contacts/Locations"]},
+    ])
+    cadence = pp.contacts_locations_amendment_cadence([t1, t2], as_of=date(2026, 8, 19))
+    assert cadence == pytest.approx(1.0, rel=0.01)  # 2 amendments / 2 years
+
+
+def test_contacts_locations_amendment_cadence_zero_for_no_trials():
+    assert pp.contacts_locations_amendment_cadence([], as_of=date(2026, 8, 19)) == 0.0
+
+
 def test_genuine_combo_trial_excluded_from_both_assets_not_assigned_to_either(warehouse):
     con = duckdb.connect(str(warehouse))
     # two independently-verified real assets sharing one trial — the
@@ -310,6 +342,71 @@ def test_typed_evidence_events_used_in_timeline_when_available(warehouse):
     assert typed[0]["label"] == "enrollment target decreased from 300 to 150"
     # untyped fallback must not also appear for a trial that has typed events
     assert not any(e["label"].startswith("amendment (untyped") for e in timeline if e["nct_id"] == "NCT00000004")
+
+
+def test_expanded_access_trial_excluded_from_trial_table_and_silence_features(warehouse):
+    """NCT06099639 diagnosis (2026-09-02): status AVAILABLE/NO_LONGER_
+    AVAILABLE, no phase, no enrollment -- an FDA expanded-access
+    (compassionate use) program, not a clinical trial. Confirmed live:
+    designModule.studyType == "EXPANDED_ACCESS" is the real signal.
+    Mixed case here: one real trial + one EAP trial on the same
+    candidate -- only the EAP one must be dropped."""
+    con = duckdb.connect(str(warehouse))
+    con.execute(
+        "INSERT INTO asset_candidates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ["cand_mixed_eap", "MixedMab", [], "[]", 2, ["NCT00000001", "NCT_EAP_1"],
+         None, None, [], False, False, "pattern_match", "suffix", "vedotin", "unreviewed"],
+    )
+    con.execute(
+        """INSERT INTO history_index (nct_id, version, posted_date, submitted_date, status,
+            study_type, changed_modules, schema_hash, indexed_at)
+           VALUES ('NCT_EAP_1', 0, ?, ?, 'AVAILABLE', 'EXPANDED_ACCESS', [], 'h', ?)""",
+        [date(2019, 1, 1), date(2019, 1, 1), datetime(2026, 8, 19, tzinfo=timezone.utc)],
+    )
+    con.close()
+
+    con = duckdb.connect(str(warehouse), read_only=True)
+    programs = pp.build_all_programs(con, as_of=date(2026, 8, 19))
+    con.close()
+    by_id = {p["candidate_id"]: p for p in programs}
+    program = by_id["cand_mixed_eap"]
+
+    assert program["excluded_expanded_access_trials"] == ["NCT_EAP_1"]
+    assert "NCT_EAP_1" not in {t["nct_id"] for t in program["trials"]}
+    assert "NCT00000001" in {t["nct_id"] for t in program["trials"]}
+    assert not any(e["nct_id"] == "NCT_EAP_1" for e in program["timeline"])
+
+
+def test_untyped_amendment_distinguishes_signal_from_cosmetic_modules(warehouse):
+    """NCT06731907 diagnosis (2026-09-02): ~25 Contacts/Locations-only
+    amendments rendered identically to a real "not yet extracted" gap.
+    changed_modules intersecting RECOMMENDED_SIGNAL_LABELS (here, "Study
+    Status") must be flagged not_yet_extracted; a purely cosmetic module
+    change (Contacts/Locations) must be flagged no_signal_modules_changed
+    — neither is a typed EvidenceEvent, so both stay in the untyped
+    fallback, but they mean different things."""
+    con = duckdb.connect(str(warehouse))
+    con.execute(
+        "INSERT INTO history_index VALUES ('NCT00000004', 1, ?, ?, 'RECRUITING', 'INTERVENTIONAL', ?, 'h', ?)",
+        [date(2020, 3, 1), date(2020, 2, 25), ["Contacts/Locations"], datetime(2020, 3, 1, tzinfo=timezone.utc)],
+    )
+    con.execute(
+        "INSERT INTO history_index VALUES ('NCT00000004', 2, ?, ?, 'RECRUITING', 'INTERVENTIONAL', ?, 'h', ?)",
+        [date(2020, 4, 1), date(2020, 3, 25), ["Study Status"], datetime(2020, 4, 1, tzinfo=timezone.utc)],
+    )
+    con.close()
+
+    con = duckdb.connect(str(warehouse), read_only=True)
+    programs = pp.build_all_programs(con, as_of=date(2026, 8, 19))
+    con.close()
+    by_id = {p["candidate_id"]: p for p in programs}
+    timeline = by_id["cand_stale"]["timeline"]
+
+    cosmetic = next(e for e in timeline if e["nct_id"] == "NCT00000004" and e.get("version") == 1)
+    signal = next(e for e in timeline if e["nct_id"] == "NCT00000004" and e.get("version") == 2)
+    assert cosmetic["amendment_kind"] == "no_signal_modules_changed"
+    assert signal["amendment_kind"] == "not_yet_extracted"
+    assert not cosmetic.get("event_type") and not signal.get("event_type")  # neither is a typed event
 
 
 def test_materialize_and_load_roundtrip(warehouse):
@@ -1086,3 +1183,140 @@ def test_flag_invalid_migration_candidates_finds_pre_schema_rows_with_adc_suffix
     result = migration.flag_invalid_migration_candidates(records)
     assert {r["program_id"] for r in result} == {"p1"}
     assert result[0]["matched_suffix"] == "govitecan"
+
+
+def _boot_app(warehouse, monkeypatch, tmp_path, as_of=date(2026, 8, 19)):
+    pp.materialize(warehouse_db=warehouse, as_of=as_of)
+    gold_path = tmp_path / "labels.jsonl"
+    session_path = tmp_path / "session.json"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    monkeypatch.setattr(q, "SESSION_PATH", session_path)
+    monkeypatch.setattr(pp, "WAREHOUSE_DB", warehouse)
+    from pharma_stats.labelling import triage_serve
+    monkeypatch.setattr(triage_serve, "REOPEN_PATH", tmp_path / "reopen.json")
+
+    import pharma_stats.labelling.app as appmod
+    monkeypatch.setattr(appmod, "WAREHOUSE_DB", warehouse)
+    appmod._state.clear()
+    appmod._init_state()
+    return appmod, gold_path, session_path
+
+
+def test_app_dead_confirmed_with_public_confirmation_accepts_evidence_type_end_to_end(warehouse, monkeypatch, tmp_path):
+    """Regression test: LabelPayload (the FastAPI request model) must
+    declare confirmation_evidence_type/third_party_* — Pydantic silently
+    drops any field not declared on the model, so a real frontend
+    selection was reaching submit_label() as None despite being sent
+    correctly, and store.validate_label_payload then permanently refused
+    the save. Goes through the real HTTP layer, not store.py directly,
+    since that's exactly the layer the bug lived in."""
+    appmod, gold_path, session_path = _boot_app(warehouse, monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+
+    r = client.get("/api/next?blind=true")
+    token = r.json()["serve_token"]
+
+    r = client.post("/api/labels", json={
+        "serve_token": token, "action": "label", "gate_reached": 3,
+        "is_adc": "yes", "in_scope": "yes",
+        "status": "dead_confirmed", "confidence": "high",
+        "kill_reason": "strategic_portfolio",
+        "label_evidence_date": "2026-01-01",
+        "public_confirmation_date": "2026-01-15",
+        "confirmation_evidence_type": "press_release",
+        "third_party_first_noted_date": "2026-01-10",
+        "third_party_source": "Citeline Pharmaprojects",
+    })
+    assert r.status_code == 200, r.text
+
+    records = store.load_records(gold_path)
+    assert records[-1]["confirmation_evidence_type"] == "press_release"
+    assert records[-1]["third_party_first_noted_date"] == "2026-01-10"
+    assert records[-1]["third_party_source"] == "Citeline Pharmaprojects"
+
+
+def test_bulk_reject_candidates_lists_small_molecule_oral_signal(warehouse, monkeypatch, tmp_path):
+    from pharma_stats.triage import evidence as tev
+
+    appmod, gold_path, session_path = _boot_app(warehouse, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        tev, "build_layer2_evidence",
+        lambda program, con: {"text_snippets": ["administered orally as a 200mg tablet once daily"]},
+    )
+
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+
+    r = client.get("/api/bulk_reject_candidates?limit=10")
+    assert r.status_code == 200
+    candidates = r.json()["candidates"]
+    assert len(candidates) == 5  # every fixture candidate flags on this snippet
+    assert all("orally" in c["signal_snippet"] for c in candidates)
+    assert all(c["program_id"] for c in candidates)
+
+
+def test_bulk_reject_writes_gate1_gold_and_clears_queue(warehouse, monkeypatch, tmp_path):
+    from pharma_stats.triage import evidence as tev
+
+    appmod, gold_path, session_path = _boot_app(warehouse, monkeypatch, tmp_path)
+    monkeypatch.setattr(tev, "build_layer2_evidence", lambda program, con: {"text_snippets": []})
+
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+
+    session_before = q.load_session(session_path)
+    target_ids = session_before["order"][:2]
+
+    r = client.post("/api/bulk_reject", json={"program_ids": target_ids, "reason": "oral small molecule"})
+    assert r.status_code == 200
+    result = r.json()
+    assert result["n_rejected"] == 2
+    assert set(result["rejected"]) == set(target_ids)
+    assert result["skipped"] == []
+
+    records = store.load_records(gold_path)
+    by_pid = {rec["program_id"]: rec for rec in records}
+    for pid in target_ids:
+        assert by_pid[pid]["gate_reached"] == 1
+        assert by_pid[pid]["is_adc"] == "no"
+        assert by_pid[pid]["decided_by"] == "human"
+        assert by_pid[pid]["evidence_note"] == "oral small molecule"
+
+    session_after = q.load_session(session_path)
+    assert not (set(target_ids) & set(session_after["order"]))
+
+    stats = client.get("/api/session").json()
+    assert stats["gate1_rejected_count"] == 2
+    assert stats["labelled_count"] == 0  # gate-1 rejections never count as a label
+
+
+def test_bulk_reject_requires_reason(warehouse, monkeypatch, tmp_path):
+    appmod, _gold_path, session_path = _boot_app(warehouse, monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+
+    session = q.load_session(session_path)
+    target = session["order"][:1]
+
+    r = client.post("/api/bulk_reject", json={"program_ids": target, "reason": "  "})
+    assert r.status_code == 422
+
+
+def test_bulk_reject_skips_already_reviewed_program(warehouse, monkeypatch, tmp_path):
+    appmod, gold_path, session_path = _boot_app(warehouse, monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+
+    session = q.load_session(session_path)
+    pid = session["order"][0]
+
+    r1 = client.post("/api/bulk_reject", json={"program_ids": [pid], "reason": "first pass"})
+    assert r1.json()["n_rejected"] == 1
+
+    r2 = client.post("/api/bulk_reject", json={"program_ids": [pid], "reason": "second pass"})
+    assert r2.json()["n_rejected"] == 0
+    assert r2.json()["skipped"] == [pid]
+
+    records = store.load_records(gold_path)
+    assert sum(1 for rec in records if rec["program_id"] == pid) == 1  # not double-written

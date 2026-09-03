@@ -127,6 +127,8 @@ CREATE TABLE IF NOT EXISTS provisional_programs (
     trial_text_hint                           JSON,
     non_oncology_hint                          BOOLEAN,
     non_industry_sponsor_hint                   BOOLEAN,
+    excluded_expanded_access_trials              VARCHAR[],
+    contacts_locations_amendment_cadence          DOUBLE,
     built_at                                     TIMESTAMP
 )
 """
@@ -478,6 +480,35 @@ def classify_archetypes(trials: list[TrialSummary]) -> list[str]:
     return sorted(tags)
 
 
+def contacts_locations_amendment_cadence(trials: list[TrialSummary], as_of: date) -> float:
+    """Amendments per year, across all of a program's trials, where
+    changed_modules includes "Contacts/Locations" — frequent site-roster
+    churn (sites added/removed/updated) is active trial management, the
+    opposite signal from silence, and was previously discarded entirely
+    (Contacts/Locations amendments only ever showed up as generic
+    "untyped" noise, never counted). Exposed as a candidate feature
+    alongside silence_score/archetypes, not folded into either — that
+    would be a separate, deliberate tuning decision, not made here.
+    0.0 if no such amendment exists at all (not None — "no churn
+    observed" is itself a real, computable value, unlike history
+    coverage which can be genuinely unknown)."""
+    count = 0
+    first_date: Optional[date] = None
+    for t in trials:
+        for h in t.history:
+            mods = set(h.get("changed_modules") or [])
+            if "Contacts/Locations" not in mods or not h.get("posted_date"):
+                continue
+            count += 1
+            d = date.fromisoformat(h["posted_date"])
+            if first_date is None or d < first_date:
+                first_date = d
+    if count == 0 or first_date is None or first_date >= as_of:
+        return 0.0
+    elapsed_years = (as_of - first_date).days / 365.25
+    return count / elapsed_years
+
+
 def _primary_archetype(tags: list[str]) -> str:
     for a in ARCHETYPES:
         if a in tags:
@@ -584,6 +615,24 @@ def _program_history_coverage(trial_coverages: list[str]) -> str:
     return "partial"
 
 
+def _is_expanded_access(nct_id: str, con: duckdb.DuckDBPyConnection) -> bool:
+    """True if any indexed version records study_type=EXPANDED_ACCESS —
+    an FDA/sponsor expanded-access (compassionate use) program, not a
+    clinical trial: no phase, no enrollment, statuses like AVAILABLE /
+    NO_LONGER_AVAILABLE that would otherwise register as anomalous
+    permanent silence. Confirmed against real data: NCT06099639's
+    history_index rows all carry studyType=EXPANDED_ACCESS, and its
+    protocolSection.designModule has no phases/enrollmentInfo at all —
+    not missing data, a structurally different record type. Checked via
+    history_index.study_type (already indexed from CT.gov's /history
+    endpoint, no extra fetch) rather than the raw snapshot body."""
+    row = con.execute(
+        "SELECT count(*) FROM history_index WHERE nct_id = ? AND study_type = 'EXPANDED_ACCESS'",
+        [nct_id],
+    ).fetchone()
+    return bool(row and row[0] > 0)
+
+
 def build_program(
     candidate_row: dict, con: duckdb.DuckDBPyConnection, as_of: Optional[date] = None,
     combo_trial_shared_with: Optional[dict] = None, has_evidence_events: Optional[bool] = None,
@@ -598,7 +647,12 @@ def build_program(
         {"nct_id": n, "shared_with": combo_trial_shared_with[n]}
         for n in all_nct_ids if n in combo_trial_shared_with
     ]
-    included_ids = [n for n in all_nct_ids if n not in combo_trial_shared_with]
+    expanded_access_ids = {n for n in all_nct_ids if _is_expanded_access(n, con)}
+    excluded_expanded_access_trials = sorted(expanded_access_ids)
+    included_ids = [
+        n for n in all_nct_ids
+        if n not in combo_trial_shared_with and n not in expanded_access_ids
+    ]
 
     trials: list[TrialSummary] = []
     trial_scope: dict[str, str] = {}
@@ -654,11 +708,31 @@ def build_program(
                 })
         else:
             for h in t.history:
+                mods = set(h["changed_modules"] or [])
+                if mods & RECOMMENDED_SIGNAL_LABELS:
+                    # A signal-relevant module changed (Study Status, Study
+                    # Design, Outcome Measures, Sponsor/Collaborators, Arms
+                    # and Interventions) but the differ produced no typed
+                    # event for it — a real gap worth checking (differ
+                    # hasn't run recently, or genuinely found nothing to
+                    # extract from a module that usually carries signal).
+                    amendment_kind = "not_yet_extracted"
+                    label = "amendment (signal-relevant module changed, not extracted yet)"
+                else:
+                    # Diagnosed 2026-09-02: NCT06731907 showed ~25 of these
+                    # as "no extracted events yet", visually identical to a
+                    # real gap. Every changed module here is cosmetic/out-
+                    # of-scope (e.g. Contacts/Locations) — the differ
+                    # correctly extracted nothing because there was nothing
+                    # to extract, not because it failed to look.
+                    amendment_kind = "no_signal_modules_changed"
+                    label = "amendment (no signal-relevant module changed — correctly filtered)"
                 timeline.append({
                     "nct_id": t.nct_id, "version": h["version"],
                     "date": h["posted_date"], "status": h["status"],
                     "changed_modules": h["changed_modules"],
-                    "label": "amendment (untyped — no extracted events for this trial yet)",
+                    "amendment_kind": amendment_kind,
+                    "label": label,
                 })
         timeline.append({
             "nct_id": t.nct_id, "version": None,
@@ -680,6 +754,7 @@ def build_program(
         "trial_count": len(trials),
         "nct_ids": included_ids,
         "excluded_shared_trials": excluded_shared_trials,
+        "excluded_expanded_access_trials": excluded_expanded_access_trials,
         # trial-level MeSH scope classification (trial_scope.py) — a hint,
         # never a silent decision. See scripts/apply_auto_scope_exclusions.py
         # for the only place a "heme_only" verdict here turns into an
@@ -701,6 +776,7 @@ def build_program(
         "band": _band_for_score(score),
         "archetypes": archetypes,
         "primary_archetype": _primary_archetype(archetypes),
+        "contacts_locations_amendment_cadence": contacts_locations_amendment_cadence(trials, as_of),
         "latest_status": latest.status if latest else None,
         "latest_nct_id": latest.nct_id if latest else None,
         "trials": [t.to_json() for t in trials],
@@ -800,8 +876,9 @@ def materialize(warehouse_db=None, as_of: Optional[date] = None) -> int:
                  discovery_strategy, match_strength, matched_term,
                  trial_scope, scope_category, spans_heme_and_solid,
                  trial_has_mesh, trial_text_hint,
-                 non_oncology_hint, non_industry_sponsor_hint, built_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 non_oncology_hint, non_industry_sponsor_hint,
+                 excluded_expanded_access_trials, contacts_locations_amendment_cadence, built_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -818,6 +895,7 @@ def materialize(warehouse_db=None, as_of: Optional[date] = None) -> int:
                     json.dumps(p["trial_scope"]), p["scope_category"], p["spans_heme_and_solid"],
                     json.dumps(p["trial_has_mesh"]), json.dumps(p["trial_text_hint"]),
                     p["non_oncology_hint"], p["non_industry_sponsor_hint"],
+                    p["excluded_expanded_access_trials"], p["contacts_locations_amendment_cadence"],
                     p["built_at"],
                 )
                 for p in programs
@@ -844,7 +922,7 @@ def load_materialized(warehouse_db=None) -> list[dict]:
                 "SELECT column_name FROM information_schema.columns WHERE table_name = 'provisional_programs'"
             ).fetchall()
         }
-        if "trial_has_mesh" not in table_cols:
+        if "trial_has_mesh" not in table_cols or "contacts_locations_amendment_cadence" not in table_cols:
             # built by an older version of this module, before that column
             # existed — treat as unmaterialized rather than hard-crash; the
             # caller's usual "not materialized yet" path rebuilds it fresh
@@ -859,7 +937,8 @@ def load_materialized(warehouse_db=None) -> list[dict]:
                    discovery_strategy, match_strength, matched_term,
                    trial_scope, scope_category, spans_heme_and_solid,
                    trial_has_mesh, trial_text_hint,
-                   non_oncology_hint, non_industry_sponsor_hint, built_at
+                   non_oncology_hint, non_industry_sponsor_hint,
+                   excluded_expanded_access_trials, contacts_locations_amendment_cadence, built_at
             FROM provisional_programs ORDER BY program_id
             """
         ).fetchall()
@@ -874,7 +953,8 @@ def load_materialized(warehouse_db=None) -> list[dict]:
         "discovery_strategy", "match_strength", "matched_term",
         "trial_scope", "scope_category", "spans_heme_and_solid",
         "trial_has_mesh", "trial_text_hint",
-        "non_oncology_hint", "non_industry_sponsor_hint", "built_at",
+        "non_oncology_hint", "non_industry_sponsor_hint",
+        "excluded_expanded_access_trials", "contacts_locations_amendment_cadence", "built_at",
     ]
     out = []
     for r in rows:
