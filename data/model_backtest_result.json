@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-09-04",
+  "cutoff": "2022-01-01",
+  "min_precision": 0.5,
+  "gate_passed": false,
+  "gate_reason": "neither the model nor the silence heuristic reaches 50% precision with any correct flag at this cutoff \u2014 no usable comparison",
+  "training_event_counts": {
+    "dead": 47,
+    "approved": 12,
+    "superseded": 3
+  },
+  "flag_threshold": 0.5,
+  "flag_date_by_program": {}
+}
