@@ -425,6 +425,7 @@ def session_stats():
             "main_queue_remaining": len(session.get("order") or []),
             "validation_queue_remaining": len(session.get("validation_order") or []),
             "auto_review_queue_remaining": len(session.get("auto_review_order") or []),
+            "stratum_gap_queue_remaining": len(session.get("stratum_gap_order") or []),
             "total_programs": len(programs),
             # "labelled" means gate 3 only — triage rejections never count
             # toward this or the stratum/target numbers below.
@@ -446,7 +447,7 @@ def session_stats():
 
 
 class SwitchQueuePayload(BaseModel):
-    queue: str  # "main" | "validation" | "auto_review"
+    queue: str  # "main" | "validation" | "auto_review" | "stratum_gap"
 
 
 @app.post("/api/switch_queue")
@@ -463,6 +464,7 @@ def switch_queue(payload: SwitchQueuePayload):
             "main_queue_remaining": len(session.get("order") or []),
             "validation_queue_remaining": len(session.get("validation_order") or []),
             "auto_review_queue_remaining": len(session.get("auto_review_order") or []),
+            "stratum_gap_queue_remaining": len(session.get("stratum_gap_order") or []),
         }
 
 

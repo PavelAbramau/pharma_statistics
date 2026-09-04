@@ -10102,5 +10102,28 @@
     "cand_01cb23be3e_her2,vedolizumab"
   ],
   "active_queue": "auto_review",
-  "validation_order": []
+  "validation_order": [],
+  "stratum_gap_order": [
+    "cand_01c58c4a47_nazartinib",
+    "cand_07b818370b_cc-292",
+    "cand_0de917325a_ro7056118",
+    "cand_16ad01ef57_hdac6_inhibitor",
+    "cand_1bda2f70f1_rxdx-107",
+    "cand_1ee8f54dd1_cc-90005",
+    "cand_204ea31230_hlx51",
+    "cand_208c695f56_gsk525762",
+    "cand_2eca43e669_recombinant_anti-pd-1_humanize",
+    "cand_2f34b9cd08_autologous_immunoglobulin_idio",
+    "cand_31beb23d28_gnc-035",
+    "cand_35ed287b46_lisocabtagene_maraleucel_(liso",
+    "cand_52db216c10_lee011",
+    "cand_6bd79f75a6_abbv-927",
+    "cand_809feb8fb4_cc-90011",
+    "cand_94fe2ff679_inc280",
+    "cand_a412856430_cc-122",
+    "cand_ab91807f44_ibi318",
+    "cand_d895e4dcc1_budigalimab",
+    "cand_dc50210c2f_rhuph20",
+    "cand_e06fc06c3f_tak-981"
+  ]
 }

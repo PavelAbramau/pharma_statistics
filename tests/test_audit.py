@@ -754,5 +754,6 @@ def test_features_stage_passes_and_reports_nan_rates_with_a_populated_panel(tmp_
     row_count = next(c for c in checks if "row count" in c.name)
     assert "2 (program, month)" in row_count.actual
 
-    not_built = next(c for c in checks if "'features' pipeline stage" in c.name)
-    assert not_built.level == "INFO"
+    still_not_built = next(c for c in checks if c.name == "still not built")
+    assert still_not_built.level == "INFO"
+    assert "Differ-event-derived" in still_not_built.actual
