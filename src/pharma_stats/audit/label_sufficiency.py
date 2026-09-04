@@ -50,18 +50,6 @@ STEP = 10
 CONVERGED_THRESHOLD_DAYS = 1.0  # marginal narrowing below this = "stopped moving"
 
 
-def _lead_sponsor(sponsors_over_time: list[dict]) -> str:
-    """Whichever sponsor has the latest last_seen date — same "most
-    current" convention triage/evidence.py uses for its lead_sponsor
-    field, reused here so the same program always clusters under the
-    same sponsor label everywhere in the project."""
-    if not sponsors_over_time:
-        return "UNKNOWN"
-    dated = [s for s in sponsors_over_time if s.get("last_seen")]
-    pool = dated or sponsors_over_time
-    return max(pool, key=lambda s: s.get("last_seen") or "")["sponsor"] or "UNKNOWN"
-
-
 def _lead_times_in_label_order(
     records: list[dict], sponsor_by_program: dict[str, str], flag_date_by_program: dict[str, str],
 ) -> list[tuple[int, str]]:
@@ -69,7 +57,6 @@ def _lead_times_in_label_order(
     flag_date_by_program (program_id -> ISO date string) comes from
     models/ — a program with no entry there has no lead time to measure
     yet (the model never flagged it), not a zero."""
-def _lead_times_in_label_order(records: list[dict], sponsor_by_program: dict[str, str]) -> list[tuple[int, str]]:
     # gate 3 only: a gate 1/2 triage rejection was never a program, so it
     # must never count as a "label" toward this sufficiency bootstrap.
     non_repeat = sorted(
