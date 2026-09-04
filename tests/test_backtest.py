@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from pharma_stats.models import backtest as bt
 from pharma_stats.models.backtest import FlagResult, compare_at_matched_precision, precision_lead_time_curve
 
 
@@ -81,6 +82,42 @@ def test_gate_fails_loudly_when_neither_curve_is_usable():
     result = compare_at_matched_precision(model_curve, heuristic_curve, min_precision=0.5)
     assert result.passed is False
     assert "no usable comparison" in result.reason
+
+
+def test_build_program_panels_truncates_at_event_date_not_panel_end(monkeypatch):
+    """Real bug found 2026-09-04: a program whose event already happened
+    before cutoff must contribute ZERO post-cutoff rows, never a
+    carried-forward "still resolvable" state extended all the way to
+    panel_end — that phantom window produced impossible, artificially
+    LATE (positive) lead times in the first real backtest run."""
+    from pharma_stats.labelling import store
+
+    program = {"program_id": "p1", "proposed_name": "Drug X", "synonyms": [], "trials": []}
+    gold = {"p1": {"status": "dead_confirmed", "public_confirmation_date": "2020-06-01",
+                   "gate_reached": 3, "action": "label", "is_repeat_probe": False,
+                   "program_id": "p1", "timestamp": "2020-06-01T00:00:00Z"}}
+    monkeypatch.setattr(store, "load_records", lambda: [gold["p1"]])
+    monkeypatch.setattr(store, "latest_by_program", lambda records: gold)
+
+    captured_end = {}
+
+    def fake_panel(program, con, end=None):
+        captured_end["end"] = end
+        # simulate carry-forward: rows exist all the way to `end`, which
+        # is exactly the behaviour that must be truncated at the event
+        # date, not left extending to panel_end.
+        months = []
+        cursor = date(2018, 1, 1)
+        while cursor <= end:
+            months.append({"as_of": cursor.isoformat(), "band_asof": 3, "cost_index": 0.0})
+            cursor = date(cursor.year + (cursor.month // 12), (cursor.month % 12) + 1, 1)
+        return months
+
+    monkeypatch.setattr(bt, "build_program_month_panel", fake_panel)
+
+    panels = bt.build_program_panels([program], con=None, cutoff=date(2022, 1, 1), panel_end=date(2026, 1, 1))
+    assert captured_end["end"] == date(2020, 6, 1)  # truncated at the event date, never panel_end
+    assert panels[0].post_cutoff_rows == []  # event was before cutoff -> nothing to evaluate
 
 
 def test_gate_passes_when_heuristic_never_reaches_precision_but_model_does():

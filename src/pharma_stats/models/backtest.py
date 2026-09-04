@@ -61,7 +61,20 @@ def build_program_panels(
     programs: list[dict], con: duckdb.DuckDBPyConnection, *, cutoff: date, panel_end: date,
 ) -> list[ProgramPanel]:
     """The expensive pass — one full panel build per program, done ONCE
-    regardless of how many thresholds get evaluated afterward."""
+    regardless of how many thresholds get evaluated afterward.
+
+    Real bug found and fixed (2026-09-04): a program whose true event
+    happened BEFORE cutoff still had its panel extended all the way to
+    panel_end (today) — the last known pre-event state just carries
+    forward for every later month (see features/trial_asof.py's
+    carry-forward design). Evaluating "flags" in that carried-forward
+    window against a confirmation date that's already in the past
+    produces impossible, artificially LATE (positive) lead times: the
+    model/heuristic can't possibly flag something before the evaluation
+    window even starts. Truncating each panel at min(event_month,
+    panel_end) — same as build_training_table — means a program already
+    resolved before cutoff correctly contributes NO post-cutoff rows at
+    all, rather than a phantom "flagged too late" one."""
     gold_latest = store.latest_by_program(store.load_records())
     out = []
     for program in programs:
@@ -70,7 +83,7 @@ def build_program_panels(
         if g is None or g.get("gate_reached") != 3:
             continue
         outcome = determine_program_outcome(program, g, panel_end)
-        rows = build_program_month_panel(program, con, end=panel_end)
+        rows = build_program_month_panel(program, con, end=min(outcome.event_month, panel_end))
         post_cutoff_rows = [r for r in rows if date.fromisoformat(r["as_of"]) >= cutoff]
         out.append(ProgramPanel(pid, post_cutoff_rows, outcome.outcome, outcome.event_month))
     return out
