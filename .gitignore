@@ -21,4 +21,5 @@ reports/*.md
 
 # Generated audit-harness reports (rebuild with python -m pharma_stats.audit)
 audit/*.md
+# ...except the hand-authored knowability-date register itself.
 !audit/leakage.md

@@ -6,14 +6,19 @@ as of the date it describes. This is the enforcement ledger CLAUDE.md's
 `snapshot.get_as_of` discipline and `docs/decisions/0001` argue for —
 before a feature is used in a backtest, its knowability-date contract
 must be written down here, not just implied by the code that computes
-it. New entries go at the top.
+it. A feature not listed here is a FAIL in `pharma_stats.audit.features`,
+not an oversight to fix later. This file is hand-authored and committed
+(it is the one exception to `audit/*.md` in `.gitignore`, which otherwise
+covers the harness's own timestamped, generated reports).
 
 ---
 
-## `synthetic_cost_index_monthly`
+## `synthetic_cost_index_monthly` (raw event, `financial_events` table)
 
-- **Module**: `pharma_stats.finance.cost_model.monthly_cost_index_series`
-- **Store**: `financial_events` (`event_type="synthetic_cost_index_monthly"`)
+- **Module**: `pharma_stats.finance.cost_model.monthly_cost_index_series`,
+  written by `scripts/build_financial_layer_cost_index.py`.
+- **Formula**: `phase_weight[phase] x enrollment x elapsed_months`,
+  summed across a program's trials, for one calendar month.
 - **Knowability date**: the month the point describes (`event_date` ==
   the `as_of` month). Every input (enrollment, phase, trial start date)
   is resolved through `resolve_trial_state_as_of`, which only reads
@@ -31,12 +36,16 @@ it. New entries go at the top.
   (`monthly_cost_index_series` starts at `min(posted_date)` across a
   program's trials).
 
-## `conviction_ratio_monthly`
+## `conviction_ratio_monthly` (raw event, `financial_events` table)
 
 - **Module**: `pharma_stats.finance.conviction.compute_conviction_ratios`,
-  called per-month in `scripts/build_financial_layer_cost_index.py` against
-  that same month's peer cost indices (not each peer's current value).
-- **Store**: `financial_events` (`event_type="conviction_ratio_monthly"`)
+  called per-month in `scripts/build_financial_layer_cost_index.py`
+  against that same month's peer cost indices (not each peer's current
+  value).
+- **Formula**: a program's `synthetic_cost_index_monthly` for month M,
+  divided by the median of its peer group's (`highest_phase`,
+  `scope_category`) `synthetic_cost_index_monthly` for the SAME month M.
+  `None` (not written) when fewer than 2 usable peers exist that month.
 - **Knowability date**: the month it describes, same as the cost index
   it's built from — every peer's value going into that month's median is
   itself resolved as-of that same month, so the ratio doesn't leak a
@@ -49,13 +58,12 @@ it. New entries go at the top.
   mean two programs in different real indications can share a peer group
   today — a precision limitation, not a knowability one.
 - **Do not use** for a program-month with `n_peers < 2` — `None` in that
-  case, filtered out before being written (see `conviction_ratio`'s own
-  refusal rule), so a ratio's mere presence in `financial_events` already
-  implies a real, sized peer group.
+  case, filtered out before being written, so a ratio's mere presence in
+  `financial_events` already implies a real, sized peer group.
 
 ## `conviction_ratio` (feature panel)
 
-- **Module**: `pharma_stats.finance.panel.build_money_layer_panel`
+- **Module**: `pharma_stats.finance.panel.build_money_layer_panel`.
 - **Formula**: `conviction_ratio_monthly` exposed as-is for the months it
   exists; the feature panel adds no aggregation on top of it.
 - **Knowability date**: `knowability_date == as_of` == the underlying
@@ -75,11 +83,13 @@ it. New entries go at the top.
   ever includes points whose own `event_date <= M`, and each of those
   points is itself knowable as of its own `event_date` (see
   `synthetic_cost_index_monthly` above) — so no term in the sum is
-  knowable later than M, and neither is the sum.
+  knowable later than M, and neither is the sum. This holds regardless of
+  how many points are summed; it is not an approximation.
 - **Missingness**: `None` before a program's first indexed cost point.
-  `finance.panel.value_as_of` forward-fills the latest known cumulative
-  value onto any later `as_of` a caller resolves against — a legitimate
-  "still true as of this later date" read, never a leak.
+  `pharma_stats.finance.panel.value_as_of` forward-fills the latest known
+  cumulative value onto any later `as_of` a caller resolves against — a
+  legitimate "still true as of this later date" read, never a leak,
+  since it never uses a point later than the value it fills forward.
 - **Never a dollar estimate.** Same caveat as the underlying cost index
   (`docs/decisions/0003`): relative ranking / trend signal only.
 
@@ -125,6 +135,26 @@ version's date, and asserts that resolution never returns a later
 version's state. Run automatically as part of `audit.features`; verified
 50/50 on production data as of 2026-09-04.
 
+## Downstream consumer: kill reason vs. spend (`productb/kill_reason_spend.py`)
+
+Resolves both money-layer features `value_as_of` each dead_confirmed
+program's own `label_evidence_date` — never a later date, and never the
+program's final (most-recent-known) value when that postdates the kill
+label. Per `docs/decisions/0004`, reads the result descriptively (spend
+at death, broken out by stated kill reason), never causally.
+
+## Not yet registered (blocks nothing above, listed for visibility)
+
+- Sponsor-level distress/impairment signals (`rd_expense_quarterly`,
+  `distress_signal`, `market_cap_snapshot`, `ev_share_estimate`,
+  `iprd_impairment_charge` — see `finance/store.EVENT_TYPES`) are defined
+  in the schema but not yet populated or consumed by any feature; they'll
+  need their own entries here before any feature panel may use them.
+- Differ-derived features beyond
+  `contacts_locations_amendment_cadence_asof` (e.g. trial_reopened/
+  arm_removed counts) and anything gated on the five-entity warehouse /
+  controlled-vocab normalisation — see `src/pharma_stats/audit/features.py`.
+
 ## See also
 
 `docs/decisions/0001-current-state-fetch-scope.md` — the general current-
@@ -132,5 +162,6 @@ state-vs-versioned-history discipline this registry's entries all lean
 on. `docs/decisions/0003-synthetic-cost-benchmark.md` — the cost index's
 full construction and the site-count exclusion this file's first entry
 summarizes. `docs/decisions/0004-spend-is-not-quality.md` — why neither
-feature here should be read as a causal claim about asset quality even
-though both are genuinely leakage-safe as predictive features.
+money-layer feature here should be read as a causal claim about asset
+quality even though both are genuinely leakage-safe as predictive
+features.
