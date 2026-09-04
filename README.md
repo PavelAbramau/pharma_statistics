@@ -20,6 +20,7 @@ Project conventions live in [`CLAUDE.md`](CLAUDE.md). The five-entity model
 | Five-entity warehouse (Asset / Program / Trial / EvidenceEvent / Org) | **not started** |
 | EvidenceEvent extraction from trial amendments | **done, not yet wired into the labelling app** — see below |
 | Labelling UI + gold labels | **provisional v0** — programs = candidate assets (no indication/line split yet), silence score is a hand-built heuristic, event timeline is untyped amendment history. See below. |
+| Corpus and label statistics | **done** — see below |
 | Program-status detection / silent-kill backtest | **not started** |
 
 The ingest → discover → backfill spine works. The analysis pipeline that
@@ -123,6 +124,43 @@ the per-event-type firing frequency, so an implausibly-noisy event type
 gets caught before it ever reaches a label. Not yet wired into the
 labelling app's timeline (which still shows untyped amendment history) —
 that's the next step once the noise floor looks right.
+
+## Corpus and label statistics
+
+```bash
+python scripts/report_corpus_statistics.py   # reports/corpus_statistics.md
+python scripts/report_label_statistics.py    # reports/label_statistics.md
+```
+
+`corpus_statistics` describes the whole provisional-program corpus — band/
+archetype/history-coverage/sponsor distributions — straight, unweighted,
+because it *is* the population, not a sample of it.
+
+`label_statistics` describes gold/labels.jsonl, which **is** a sample —
+labelling/queue.py draws it stratified by (silence-score band x
+archetype), not uniformly, so a raw "N% of labelled programs are
+dead_confirmed" figure describes the queue's sampling design, not the
+corpus. Every population-level number this module produces is therefore
+inverse-probability-weighted by stratum (weight = population(stratum) /
+labelled(stratum)); there is no unweighted population-estimate function,
+and if any non-empty stratum has zero labels yet, the module refuses
+outright (`InsufficientStratumCoverageError`) rather than emit a number
+that silently omits it. Confidence intervals resample **sponsors**, not
+programs (cluster bootstrap) — same ICC=0.18 sponsor-correlation reason
+audit/label_sufficiency.py's lead-time bootstrap does.
+
+It also reports the stated-vs-true kill-reason divergence: how often
+CT.gov's own `why_stopped` text, read through a small deterministic
+keyword classifier, would give a *different* kill reason than the
+labeller's full-evidence judgement. On the current gold set this is a
+real finding, not noise — the labelled (gate-3, latest-per-program,
+dead_confirmed) sample splits `strategic_portfolio`=27 vs
+`futility_efficacy`=25 vs `toxicity_safety`=11 by the reviewer's true
+judgement, and a meaningful share of those disagree with what a
+text-only reading of the registry would have concluded (see
+`kill_reason_divergence_sample_summary`'s confusion matrix, and
+`weighted_kill_reason_divergence_ci` for the population-level, IPW +
+sponsor-bootstrapped estimate of the mismatch rate).
 
 ## Audit harness
 
