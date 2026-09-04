@@ -66,6 +66,23 @@ def _manifest_con(manifest_db: Path = MANIFEST_DB) -> duckdb.DuckDBPyConnection:
     return con
 
 
+def _manifest_con_read_only(manifest_db: Path = MANIFEST_DB) -> Optional[duckdb.DuckDBPyConnection]:
+    """A read_only connection lets DuckDB grant multiple simultaneous
+    readers, instead of every caller fighting for an exclusive lock it
+    never actually needed. get_as_of/latest/all_ids never write, so they
+    always go through this, never _manifest_con's read-write connection —
+    that's what previously made a pure-read backtest or matrix-build
+    script collide with any other concurrent read as if it were a
+    writer. DuckDB's read_only mode requires the file to already exist
+    (it won't create one), so a not-yet-built manifest reports "no data"
+    (None from get_as_of) via this returning None, rather than raising —
+    consistent with how every other "not built yet" path in this project
+    degrades."""
+    if not manifest_db.exists():
+        return None
+    return duckdb.connect(str(manifest_db), read_only=True)
+
+
 def _read_envelope(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -184,7 +201,9 @@ def get_as_of(
     if isinstance(as_of, str):
         as_of = date.fromisoformat(as_of)
 
-    con = _manifest_con(manifest_db)
+    con = _manifest_con_read_only(manifest_db)
+    if con is None:
+        return None
     try:
         row = con.execute(
             """
@@ -264,7 +283,9 @@ def rebuild_manifest(raw_dir: Path = RAW_DIR, manifest_db: Path = MANIFEST_DB) -
 
 def all_ids(source: str, *, manifest_db: Path = MANIFEST_DB) -> list[str]:
     """Distinct ids ever snapshotted for a source, per the manifest."""
-    con = _manifest_con(manifest_db)
+    con = _manifest_con_read_only(manifest_db)
+    if con is None:
+        return []
     try:
         rows = con.execute(
             "SELECT DISTINCT id FROM snapshots WHERE source = ? ORDER BY id", [source]
