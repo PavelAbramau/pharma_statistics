@@ -13,6 +13,38 @@ def _flag(pid, flag_date, true_outcome, true_event_date=None):
     return FlagResult(pid, flag_date, true_outcome, true_event_date)
 
 
+def test_model_flag_dates_from_panels_handles_none_silence_score():
+    """Real bug found 2026-09-04: a panel row with no resolvable trial
+    state has silence_score_asof=None, which statsmodels' predict()
+    chokes on with a raw TypeError rather than a clean NaN error. Must
+    be imputed the same way build_training_table already does."""
+    from pharma_stats.models.discrete_time_survival import fit_cause_specific_hazard
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    n = 60
+    train_df = pd.DataFrame({
+        "silence_score_asof": rng.uniform(0, 100, n),
+        "log_cost_index": rng.uniform(0, 5, n),
+        "cost_index": rng.uniform(0, 100, n),
+        "sponsor": rng.integers(0, 10, n),
+        "event_dead": [1] * 12 + [0] * (n - 12),
+    })
+    hazard = fit_cause_specific_hazard(train_df, "event_dead")
+
+    panel = bt.ProgramPanel(
+        program_id="p1",
+        post_cutoff_rows=[
+            {"as_of": "2023-01-01", "silence_score_asof": None, "band_asof": None, "cost_index": None},
+            {"as_of": "2023-02-01", "silence_score_asof": 50.0, "band_asof": 2, "cost_index": 10.0},
+        ],
+        true_outcome="dead", true_event_date=date(2023, 3, 1),
+    )
+    flags = bt.model_flag_dates_from_panels([panel], hazard, threshold=0.01)
+    assert "p1" in flags  # must not raise
+
+
 def test_precision_lead_time_curve_basic():
     flags = {
         "p1": _flag("p1", date(2021, 1, 1), "dead", date(2021, 3, 1)),  # correct, lead = -59d (flagged BEFORE confirmation... wait sign)

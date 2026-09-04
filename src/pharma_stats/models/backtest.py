@@ -97,6 +97,11 @@ def model_flag_dates_from_panels(panels: list[ProgramPanel], hazard: CauseSpecif
             continue
         df = pd.DataFrame(panel.post_cutoff_rows)
         df["log_cost_index"] = np.log1p(df["cost_index"].fillna(0.0))
+        # Same imputation as build_training_table: a month with no
+        # resolvable trial state gets silence_score_asof=None, which
+        # breaks statsmodels' predict() with a raw TypeError rather than
+        # a clean NaN — see discrete_time_survival.build_training_table.
+        df["silence_score_asof"] = df["silence_score_asof"].fillna(0.0).astype(float)
         preds = hazard.predict(df)
         dates_ = [date.fromisoformat(r["as_of"]) for r in panel.post_cutoff_rows]
         flag = _first_crossing(dates_, list(preds), threshold)
