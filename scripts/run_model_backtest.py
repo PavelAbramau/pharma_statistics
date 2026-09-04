@@ -93,18 +93,20 @@ def main() -> None:
               "## Training event counts", ""]
     for oc in dts.OUTCOME_CLASSES:
         lines.append(f"- {oc}: {int(train_df[f'event_{oc}'].sum())} events")
+    def _row(p) -> str:
+        # precision and median_lead_time_days are independently
+        # nullable: n_flagged>0 with n_correct==0 gives a real precision
+        # of 0.0 (not None) but no lead times to compute a median from.
+        prec = f"{p.precision:.0%}" if p.precision is not None else "n/a"
+        lead = f"{p.median_lead_time_days:.0f}" if p.median_lead_time_days is not None else "n/a"
+        return f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | {prec} | {lead} |"
+
     lines += ["", "## Model curve (dead, cause-specific hazard)", "",
               "| threshold | n_flagged | n_correct | precision | median_lead_days |", "|---|---|---|---|---|"]
-    for p in model_curve:
-        lines.append(f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | "
-                      f"{p.precision:.0%} | {p.median_lead_time_days:.0f} |" if p.precision is not None
-                      else f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | n/a | n/a |")
+    lines += [_row(p) for p in model_curve]
     lines += ["", "## Heuristic curve (silence-score band)", "",
               "| band>= | n_flagged | n_correct | precision | median_lead_days |", "|---|---|---|---|---|"]
-    for p in heuristic_curve:
-        lines.append(f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | "
-                      f"{p.precision:.0%} | {p.median_lead_time_days:.0f} |" if p.precision is not None
-                      else f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | n/a | n/a |")
+    lines += [_row(p) for p in heuristic_curve]
 
     lines += ["", "## Audit gate", "", f"**{'PASS' if gate.passed else 'FAIL'}** — {gate.reason}", ""]
 
