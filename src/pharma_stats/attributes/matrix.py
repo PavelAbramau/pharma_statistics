@@ -1,14 +1,34 @@
 """B5: crowding and failure density — the opportunity matrix.
 
+Axes: payload chemotype (~10 CLAUDE.md classes) x tumour system
+(~8 coarse organ/tissue groups, attributes/tumour_system.py) — around 80
+cells. This replaces an earlier target x specific-MeSH-indication version:
+~300 in-scope programs spread across ~350 HGNC targets x ~150 specific
+MeSH terms can never produce a dense matrix — that's arithmetic, not a
+data gap, and no amount of further labelling fixes it. Coarsening both
+axes is the fix. See docs/decisions/0005 for the full rationale.
+
+Both axes exclude unresolved values entirely rather than bucketing them
+into a catch-all column/row ("undisclosed" payload, "unknown" system) —
+a catch-all cell would itself become the single largest cell in the
+matrix and would misrepresent "we don't know" as "this combination is
+common":
+  - payload chemotype "undisclosed" (attributes/payload.py — no INN
+    suffix on file yet, the common case for early dev-code-only
+    candidates) -> excluded.
+  - tumour system unresolved (attributes/tumour_system.py — no MeSH data,
+    or MeSH present but only a generic/root term like "Neoplasms" or a
+    site-agnostic histology term like "Carcinoma") -> excluded. This is
+    the "minimum MeSH tree depth" rule: a term that says nothing about
+    body site is too shallow to be a matrix cell.
+
 Population: programs confirmed is_adc=yes AND in_scope=yes (gold-first,
 triage-staged fallback) — the same strict population attribute_coverage
-reporting used. Deliberately not widened to the broader is_adc=yes-only
-pool: that pool still includes candidates that will turn out heme-only
-or non-industry on Gate-2 review (~22% historically), which would
-contaminate the very cells this matrix is trying to read honestly. This
-makes the matrix thin (38 programs, per docs/decisions/0003's population-
-size finding) — shipped anyway, explicitly marked provisional, per the
-user's own call once they knew the number.
+reporting used, AND resolvable on both axes per the exclusion rules
+above. Deliberately not widened to the broader is_adc=yes-only pool: that
+pool still includes candidates that will turn out heme-only or
+non-industry on Gate-2 review (~22% historically), which would
+contaminate the very cells this matrix is trying to read honestly.
 
 Live/dead is a PROXY, not a certain fact, for any program without a
 gold gate-3 label (only 38 of ~1093 candidates have one):
@@ -21,7 +41,7 @@ gold gate-3 label (only 38 of ~1093 candidates have one):
     silence-score heuristic's band is high (>= DEAD_PROXY_BAND_THRESHOLD)
     AND the program's history_coverage is "full" (never call something
     dead off an incomplete timeline) -> dead-by-proxy
-This is exactly what makes the graveyard quadrant even computable before
+This is exactly what makes the graveyard cells even computable before
 enough Gate-3 labels exist — and exactly why it must never be reported
 as more certain than "proxy."
 """
@@ -30,8 +50,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from pharma_stats.attributes import indication as ind
-from pharma_stats.attributes import target as tgt
+from pharma_stats.attributes import payload as pl
+from pharma_stats.attributes import tumour_system as tsys
 from pharma_stats.labelling import store
 
 DEAD_PROXY_BAND_THRESHOLD = 3  # SCORE_BANDS index (0-4); band 3 = 60-80, band 4 = 80-100
@@ -76,8 +96,8 @@ def program_live_dead_status(program: dict, gold_latest: dict) -> Optional[Progr
 
 @dataclass
 class Cell:
-    target: str
-    indication: str
+    payload: str
+    tumour_system: str
     live_programs: list[dict] = field(default_factory=list)
     dead_programs: list[dict] = field(default_factory=list)
 
@@ -97,12 +117,12 @@ class Cell:
 def classify_quadrant(n_live: int, n_dead: int, min_n: int) -> str:
     """untested_white_space (0 evidence at all) is distinct from
     insufficient_evidence (some evidence, just not enough to trust —
-    greyed, not read as white space, per the user's own framing).
-    Above min_n: red_ocean (many live, no deaths seen), graveyard (few/
-    no live, many dead), contested_and_hard (meaningful amounts of
-    both) — a mixed cell that clears min_n but has neither side
-    individually >= min_n still counts as contested_and_hard, the
-    closest of the four to "some of both, no dominant read.\""""
+    greyed out of the graveyard ranking, not read as white space, per the
+    user's own framing). Above min_n: red_ocean (many live, no deaths
+    seen), graveyard (few/no live, many dead), contested_and_hard
+    (meaningful amounts of both) — a mixed cell that clears min_n but has
+    neither side individually >= min_n still counts as contested_and_hard,
+    the closest of the four to "some of both, no dominant read.\""""
     total = n_live + n_dead
     if total == 0:
         return "untested_white_space"
@@ -119,31 +139,45 @@ def classify_quadrant(n_live: int, n_dead: int, min_n: int) -> str:
 
 def build_matrix(
     programs: list[dict], *, min_n: int = 5,
-) -> tuple[dict[tuple[str, str], Cell], dict[str, dict]]:
-    """(cells, program_attributes). program_attributes keys every
-    in-population program_id to {"target", "indication", "status"} for
-    caller-side reporting (e.g. the graveyard ranked list) without
-    recomputing attribute derivation twice."""
+) -> tuple[dict[tuple[str, str], Cell], dict[str, dict], dict[str, int]]:
+    """(cells, program_attributes, population_stats).
+
+    program_attributes keys every in-population program_id to
+    {"payload", "tumour_system", ...} for caller-side reporting (e.g. the
+    graveyard ranked list) without recomputing attribute derivation
+    twice. population_stats counts why programs left the population at
+    each stage, so callers can report the exclusion rules honestly
+    instead of just a final headline number."""
     gold_records = store.load_records()
     gold_latest = store.latest_by_program(gold_records)
 
     cells: dict[tuple[str, str], Cell] = {}
     program_attributes: dict[str, dict] = {}
+    n_scope_confirmed = 0
+    n_excluded_payload_undisclosed = 0
+    n_excluded_system_unresolved = 0
 
     for p in programs:
         pstatus = program_live_dead_status(p, gold_latest)
         if pstatus is None:
             continue
+        n_scope_confirmed += 1
 
         name = p.get("proposed_name")
         synonyms = p.get("synonyms") or []
-        target, target_source = tgt.derive_target(name, synonyms, text_snippets=None)
-        indication = ind.program_indication_mesh_term(p)
 
-        target_label = target or "undisclosed"
-        indication_label = indication or "unknown"
-        key = (target_label, indication_label)
-        cell = cells.setdefault(key, Cell(target=target_label, indication=indication_label))
+        chemotype = pl.derive_payload_chemotype(name, synonyms)
+        if chemotype == "undisclosed":
+            n_excluded_payload_undisclosed += 1
+            continue
+
+        system = tsys.program_tumour_system(p)
+        if system is None:
+            n_excluded_system_unresolved += 1
+            continue
+
+        key = (chemotype, system)
+        cell = cells.setdefault(key, Cell(payload=chemotype, tumour_system=system))
         entry = {
             "program_id": p["program_id"], "proposed_name": name,
             "status": pstatus.status, "kill_reason": pstatus.kill_reason, "basis": pstatus.basis,
@@ -154,9 +188,15 @@ def build_matrix(
             cell.live_programs.append(entry)
 
         program_attributes[p["program_id"]] = {
-            "target": target_label, "target_source": target_source,
-            "indication": indication_label, "is_dead": pstatus.is_dead, "basis": pstatus.basis,
+            "payload": chemotype, "tumour_system": system,
+            "is_dead": pstatus.is_dead, "basis": pstatus.basis,
             "status": pstatus.status, "kill_reason": pstatus.kill_reason,
         }
 
-    return cells, program_attributes
+    population_stats = {
+        "n_scope_confirmed": n_scope_confirmed,
+        "n_excluded_payload_undisclosed": n_excluded_payload_undisclosed,
+        "n_excluded_system_unresolved": n_excluded_system_unresolved,
+        "n_in_population": len(program_attributes),
+    }
+    return cells, program_attributes, population_stats
