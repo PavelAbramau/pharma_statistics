@@ -20,6 +20,9 @@ Project conventions live in [`CLAUDE.md`](CLAUDE.md). The five-entity model
 | Five-entity warehouse (Asset / Program / Trial / EvidenceEvent / Org) | **not started** |
 | EvidenceEvent extraction from trial amendments | **done, not yet wired into the labelling app** — see below |
 | Labelling UI + gold labels | **provisional v0** — programs = candidate assets (no indication/line split yet), silence score is a hand-built heuristic, event timeline is untyped amendment history. See below. |
+| Money layer (Product C): synthetic cost index, conviction ratio, `financial_events` | **done** — see below |
+| Money-layer feature panel (`conviction_ratio`, `estimated_cumulative_spend`) + `audit/leakage.md` register | **done** — see below |
+| Product B (sourcing screener): B0 (asset attributes) + B1 (kill reason vs. spend) + B5 (opportunity matrix) | **partial** — B2-B4, B6-B7 not started |
 | Program-status detection / silent-kill backtest | **not started** |
 
 The ingest → discover → backfill spine works. The analysis pipeline that
@@ -123,6 +126,24 @@ the per-event-type firing frequency, so an implausibly-noisy event type
 gets caught before it ever reaches a label. Not yet wired into the
 labelling app's timeline (which still shows untyped amendment history) —
 that's the next step once the noise floor looks right.
+
+## Money layer + feature panel
+
+```bash
+python scripts/build_financial_layer_cost_index.py   # writes financial_events (see finance/store.py)
+python scripts/report_kill_reason_vs_spend.py         # reports/kill_reason_vs_spend.md
+```
+
+`pharma_stats.finance.panel` is the first consumer of `financial_events`:
+it turns the raw monthly `synthetic_cost_index_monthly` /
+`conviction_ratio_monthly` events into a per-program, per-month feature
+panel (`conviction_ratio`, `estimated_cumulative_spend`), each with a
+knowability-date contract registered in `audit/leakage.md` and checked by
+the audit harness's `features` stage. `pharma_stats.productb.kill_reason_spend`
+(Product B, B1) resolves both features as of each `dead_confirmed`
+program's own `label_evidence_date` and reports spend-at-death broken out
+by `kill_reason` — per `docs/decisions/0004`, read descriptively (how
+much a sponsor had committed when a program died), never causally.
 
 ## Audit harness
 
