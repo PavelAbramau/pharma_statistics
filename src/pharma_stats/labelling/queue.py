@@ -69,12 +69,20 @@ def build_stratified_order(programs: list[dict], exclude_ids: set[str]) -> list[
     return order
 
 
+QUEUE_KEYS = {"main": "order", "validation": "validation_order", "auto_review": "auto_review_order"}
+# auto_review programs already have a gold record (an auto-decided one
+# under review) — serving them needs the same "already reviewed, serve
+# anyway" bypass as an explicit reopen (see app.py's /api/next).
+BYPASS_REVIEWED_QUEUES = {"auto_review"}
+
+
 def new_session(programs: list[dict], exclude_ids: set[str]) -> dict:
     return {
         "session_id": str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "order": build_stratified_order(programs, exclude_ids),
         "validation_order": [],
+        "auto_review_order": [],
         "active_queue": "main",
         "total_served": 0,
         "pending_serve": {},
@@ -83,16 +91,16 @@ def new_session(programs: list[dict], exclude_ids: set[str]) -> dict:
 
 
 def _active_list_key(session: dict) -> str:
-    """"order" or "validation_order" — old sessions predate active_queue,
-    so missing/unrecognized values default to "main" rather than erroring."""
-    return "validation_order" if session.get("active_queue") == "validation" else "order"
+    """One of QUEUE_KEYS' values — old sessions predate active_queue, and
+    an unrecognized value defaults to "main" rather than erroring."""
+    return QUEUE_KEYS.get(session.get("active_queue"), "order")
 
 
 def switch_queue(session: dict, queue_name: str) -> None:
-    if queue_name not in ("main", "validation"):
-        raise ValueError(f"unknown queue {queue_name!r} — must be 'main' or 'validation'")
+    if queue_name not in QUEUE_KEYS:
+        raise ValueError(f"unknown queue {queue_name!r} — must be one of {sorted(QUEUE_KEYS)}")
     session["active_queue"] = queue_name
-    session.setdefault("validation_order", [])
+    session.setdefault(QUEUE_KEYS[queue_name], [])
 
 
 def load_session(path: Optional[Path] = None) -> Optional[dict]:
@@ -152,13 +160,23 @@ def make_serve_token(
         "history_coverage": program["history_coverage"],
         "is_repeat_probe": is_repeat,
         "served_at": datetime.now(timezone.utc).isoformat(),
+        # Which queue this came from, at serve time — a stale re-serve
+        # (app.py's TTL sweep) must requeue here even if the reviewer has
+        # since switched the active queue to something else; otherwise an
+        # auto_review card could silently end up mixed into "main".
+        "origin_queue": session.get("active_queue", "main"),
     }
     session["pending_serve"][token] = entry
     session["served_log"].append({**entry, "serve_token": token})
     return token
 
 
-def requeue(session: dict, program_id: str) -> None:
-    """'Skip, come back to this' — put it back at the end of the active
-    queue rather than discarding it."""
-    session.setdefault(_active_list_key(session), []).append(program_id)
+def requeue(session: dict, program_id: str, *, queue_name: Optional[str] = None) -> None:
+    """'Skip, come back to this' — put it back at the end of a queue
+    rather than discarding it. Defaults to the currently active queue
+    (the normal case: skip happens immediately after serving, before any
+    queue switch); pass queue_name explicitly for a delayed requeue (the
+    TTL sweep) that must land back in the queue the card actually came
+    from, not whatever's active now."""
+    key = QUEUE_KEYS.get(queue_name, _active_list_key(session)) if queue_name else _active_list_key(session)
+    session.setdefault(key, []).append(program_id)

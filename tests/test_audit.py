@@ -212,10 +212,54 @@ def test_gold_set_reports_status_revision_rate(tmp_path, monkeypatch):
     assert revision.actual == "25% (1 / 4)"
 
 
+def test_label_sufficiency_defaults_to_blocked_without_model_flag_dates(tmp_path, monkeypatch):
+    """label_evidence_date is never read for this again (see
+    docs/decisions/0005) — with no model_flag_date supplied AND no
+    published model_backtest_result.json on disk, the stage must report
+    BLOCKED, never fall back to computing something from the old,
+    now-distrusted fields."""
+    monkeypatch.setattr(store, "LABELS_PATH", tmp_path / "labels.jsonl")
+    monkeypatch.setattr(label_sufficiency, "MODEL_RESULT_PATH", tmp_path / "model_backtest_result.json")
+    checks = label_sufficiency.run()
+    assert checks[0].level == "INFO"
+    assert "BLOCKED" in checks[0].actual
+
+
+def test_label_sufficiency_loads_published_flag_dates_by_default(tmp_path, monkeypatch):
+    """The harness calls run() with no arguments — it must pick up
+    scripts/run_model_backtest.py's published result file on its own."""
+    import json as _json
+    gold_path = tmp_path / "labels.jsonl"
+    monkeypatch.setattr(store, "LABELS_PATH", gold_path)
+    sponsors = {f"p{i}": f"Sponsor{i}" for i in range(15)}
+    monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: _sponsor_programs(sponsors))
+
+    flag_dates = {}
+    for i in range(15):
+        rec = {
+            "event_id": f"e{i}", "timestamp": f"2026-01-{i+1:02d}T00:00:00+00:00", "action": "label",
+            "gate_reached": 3, "is_adc": "yes", "in_scope": "yes",
+            "program_id": f"p{i}", "status": "dead_confirmed", "kill_reason": "futility_efficacy",
+            "confidence": "high", "evidence_note": "", "label_evidence_date": "2024-01-01",
+            "public_confirmation_date": "2024-06-01", "never_publicly_confirmed": False,
+            "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
+        }
+        store.append_record(rec, path=gold_path)
+        flag_dates[f"p{i}"] = "2024-06-05"
+
+    result_path = tmp_path / "model_backtest_result.json"
+    result_path.write_text(_json.dumps({"flag_date_by_program": flag_dates}), encoding="utf-8")
+    monkeypatch.setattr(label_sufficiency, "MODEL_RESULT_PATH", result_path)
+
+    checks = label_sufficiency.run()  # no explicit flag_date_by_program -- must load the file
+    assert "BLOCKED" not in checks[0].actual
+    assert "N=15" in checks[0].actual
+
+
 def test_label_sufficiency_reports_insufficient_data(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "LABELS_PATH", tmp_path / "labels.jsonl")
     monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: [])
-    checks = label_sufficiency.run()
+    checks = label_sufficiency.run(flag_date_by_program={"nonexistent": "2024-01-01"})
     assert checks[0].level == "INFO"
     assert "0 usable" in checks[0].actual
 
@@ -239,7 +283,7 @@ def test_label_sufficiency_ignores_gate1_and_gate2_rejections(tmp_path, monkeypa
         }
         store.append_record(rec, path=gold_path)
 
-    checks = label_sufficiency.run()
+    checks = label_sufficiency.run(flag_date_by_program={f"reject{i}": "2026-01-01" for i in range(15)})
     assert checks[0].level == "INFO"
     assert "0 usable" in checks[0].actual  # 15 gate-1 rejections, 0 real labels
 
@@ -257,6 +301,7 @@ def test_label_sufficiency_bootstraps_with_enough_data(tmp_path, monkeypatch):
     sponsors = {f"p{i}": f"Sponsor{i}" for i in range(15)}  # 15 distinct sponsors, no clustering
     monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: _sponsor_programs(sponsors))
 
+    flag_dates = {}
     for i in range(15):
         rec = {
             "event_id": f"e{i}", "timestamp": f"2026-01-{i+1:02d}T00:00:00+00:00", "action": "label",
@@ -267,8 +312,9 @@ def test_label_sufficiency_bootstraps_with_enough_data(tmp_path, monkeypatch):
             "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
         }
         store.append_record(rec, path=gold_path)
+        flag_dates[f"p{i}"] = "2024-06-05"  # model flagged 5 days after confirmation
 
-    checks = label_sufficiency.run()
+    checks = label_sufficiency.run(flag_date_by_program=flag_dates)
     assert len(checks) == 1
     assert checks[0].level in ("INFO", "PASS")
     assert "N=15" in checks[0].actual
@@ -292,6 +338,7 @@ def test_label_sufficiency_cluster_bootstrap_widens_ci_under_sponsor_correlation
     # mean; the true uncertainty is "which of two sponsors dominates the
     # draw," which is much wider.
     sponsors = {}
+    flag_dates = {}
     for i in range(20):
         sponsor = "SponsorA" if i % 2 == 0 else "SponsorB"
         sponsors[f"p{i}"] = sponsor
@@ -304,14 +351,16 @@ def test_label_sufficiency_cluster_bootstrap_widens_ci_under_sponsor_correlation
             "program_id": f"p{i}", "status": "dead_confirmed", "kill_reason": "futility_efficacy",
             "confidence": "high", "evidence_note": "",
             "label_evidence_date": confirmation.isoformat(),
-            "public_confirmation_date": (confirmation + timedelta(days=lead_days)).isoformat(),
+            "public_confirmation_date": confirmation.isoformat(),
             "never_publicly_confirmed": False,
             "blind": True, "is_repeat_probe": False, "seconds_spent": 30,
         }
         store.append_record(rec, path=gold_path)
+        # flag_date - confirmation_date = lead_days (confirmation itself is fixed at 2024-01-01)
+        flag_dates[f"p{i}"] = (confirmation + timedelta(days=lead_days)).isoformat()
     monkeypatch.setattr(label_sufficiency.pp, "load_materialized", lambda: _sponsor_programs(sponsors))
 
-    checks = label_sufficiency.run()
+    checks = label_sufficiency.run(flag_date_by_program=flag_dates)
     assert "2 distinct sponsors" in checks[0].actual
     # With only 2 clusters, the bootstrap can only ever draw {A,A}, {A,B},
     # {B,A}, or {B,B} -- half the resamples land on a pure-sponsor mean

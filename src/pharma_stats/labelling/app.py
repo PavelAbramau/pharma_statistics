@@ -85,7 +85,7 @@ def _sweep_stale_pending(ttl_seconds: int = 1800) -> None:
     for token in stale_tokens:
         entry = session["pending_serve"].pop(token)
         if not entry["is_repeat_probe"]:
-            q.requeue(session, entry["program_id"])
+            q.requeue(session, entry["program_id"], queue_name=entry.get("origin_queue"))
 
 
 def _validation_sample_ids() -> set[str]:
@@ -230,6 +230,12 @@ def next_program(blind: bool = True):
         # here could spin forever if nothing in the queue has full
         # coverage yet.
         active_key = q._active_list_key(session)
+        active_queue_name = session.get("active_queue", "main")
+        # auto_review programs already have a gold record (an auto-decided
+        # one under review) — they need the same "already reviewed, serve
+        # anyway, full blind card" bypass an explicit reopen gets, since
+        # they'd otherwise be silently skipped as "already reviewed" below.
+        from_auto_review_queue = active_queue_name in q.BYPASS_REVIEWED_QUEUES
         max_attempts = len(session.get(active_key, [])) + len(reopen_queue) + len(fully_labelled) + 2
         for _ in range(max_attempts):
             serving_reopen = False
@@ -240,6 +246,8 @@ def next_program(blind: bool = True):
                 serving_reopen = True
             else:
                 program_id, is_repeat = q.pop_next(session, fully_labelled)
+                if program_id is not None and from_auto_review_queue:
+                    serving_reopen = True
             if program_id is None:
                 q.save_session(session)
                 return JSONResponse({"done": True, "message": "Queue exhausted — every provisional program has been labelled or flagged."})
@@ -260,6 +268,8 @@ def next_program(blind: bool = True):
                 # than drop — a later backfill pass may complete it.
                 if not is_repeat and not serving_reopen:
                     q.requeue(session, program_id)
+                elif from_auto_review_queue:
+                    session.setdefault(active_key, []).append(program_id)
                 elif serving_reopen:
                     reopen_queue.append(program_id)
                 program = None
@@ -280,16 +290,31 @@ def next_program(blind: bool = True):
         serve_token = q.make_serve_token(session, program, is_repeat)
         q.save_session(session)
 
+        public = _program_public(
+            program, reveal=not blind,
+            start_gate=plan.start_gate if plan else 1,
+            reopened=serving_reopen,
+            triage_context=plan.context if plan else None,
+        )
+        if from_auto_review_queue:
+            # The card being audited already has a gold line — surface it
+            # as informational context (never pre-filled into the form)
+            # so the reviewer can see exactly what the rule concluded
+            # while still making their own independent call.
+            prior = store.latest_by_program(records).get(program["program_id"])
+            if prior:
+                public["prior_auto_decision"] = {
+                    "is_adc": prior.get("is_adc"), "in_scope": prior.get("in_scope"),
+                    "scope_reason": prior.get("scope_reason"),
+                    "triage_layer": prior.get("triage_layer"), "triage_rule": prior.get("triage_rule"),
+                    "gate_reached": prior.get("gate_reached"),
+                }
+
         return {
             "done": False,
             "serve_token": serve_token,
             "session_id": session["session_id"],
-            "program": _program_public(
-                program, reveal=not blind,
-                start_gate=plan.start_gate if plan else 1,
-                reopened=serving_reopen,
-                triage_context=plan.context if plan else None,
-            ),
+            "program": public,
         }
 
 
@@ -399,6 +424,7 @@ def session_stats():
             "active_queue": session.get("active_queue", "main"),
             "main_queue_remaining": len(session.get("order") or []),
             "validation_queue_remaining": len(session.get("validation_order") or []),
+            "auto_review_queue_remaining": len(session.get("auto_review_order") or []),
             "total_programs": len(programs),
             # "labelled" means gate 3 only — triage rejections never count
             # toward this or the stratum/target numbers below.
@@ -420,7 +446,7 @@ def session_stats():
 
 
 class SwitchQueuePayload(BaseModel):
-    queue: str  # "main" | "validation"
+    queue: str  # "main" | "validation" | "auto_review"
 
 
 @app.post("/api/switch_queue")
@@ -436,6 +462,7 @@ def switch_queue(payload: SwitchQueuePayload):
             "ok": True, "active_queue": session["active_queue"],
             "main_queue_remaining": len(session.get("order") or []),
             "validation_queue_remaining": len(session.get("validation_order") or []),
+            "auto_review_queue_remaining": len(session.get("auto_review_order") or []),
         }
 
 

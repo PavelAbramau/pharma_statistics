@@ -41,9 +41,11 @@ async function refreshSessionStats() {
   $("medianSec").textContent = s.median_seconds_per_label ? s.median_seconds_per_label.toFixed(0) : "–";
   if ($("mainQueueN")) $("mainQueueN").textContent = s.main_queue_remaining ?? "–";
   if ($("valQueueN")) $("valQueueN").textContent = s.validation_queue_remaining ?? "–";
+  if ($("autoReviewQueueN")) $("autoReviewQueueN").textContent = s.auto_review_queue_remaining ?? "–";
   if ($("queueMainBtn") && $("queueValidationBtn")) {
     $("queueMainBtn").classList.toggle("active", s.active_queue === "main");
     $("queueValidationBtn").classList.toggle("active", s.active_queue === "validation");
+    if ($("queueAutoReviewBtn")) $("queueAutoReviewBtn").classList.toggle("active", s.active_queue === "auto_review");
   }
   if ($("queueGate1")) $("queueGate1").textContent = s.queue_enter_gate1 ?? "–";
   if ($("queueGate3")) $("queueGate3").textContent = s.queue_enter_gate3 ?? "–";
@@ -437,7 +439,16 @@ function renderTriageBanners(p) {
   const reopenEl = $("reopenBanner");
   const triageEl = $("triageBanner");
   if (reopenEl) {
-    if (p.reopened) {
+    if (p.prior_auto_decision) {
+      const d = p.prior_auto_decision;
+      reopenEl.style.display = "block";
+      reopenEl.innerHTML = `<section class="card reopen-banner"><h2>Reviewing an automatic decision</h2>
+        <div>The current gold line was auto-decided (layer ${esc(d.triage_layer ?? "?")}, rule
+          ${esc(d.triage_rule || "?")}): <b>is_adc=${esc(d.is_adc || "?")}</b>
+          ${d.in_scope ? ` · in_scope=${esc(d.in_scope)}` : ""}${d.scope_reason ? ` (${esc(d.scope_reason)})` : ""},
+          gate ${esc(d.gate_reached ?? "?")}. Your answer here is a NEW gold line — it supersedes this one,
+          the old line stays in the history. Judge Gates 1–${d.gate_reached || 2} fresh, no pre-fill.</div></section>`;
+    } else if (p.reopened) {
       reopenEl.style.display = "block";
       reopenEl.innerHTML = `<section class="card reopen-banner"><h2>Re-opened for re-decision</h2>
         <div>Previous gold line is unchanged. This is a new review — Gates 1–3 from scratch, no pre-fill.</div></section>`;
