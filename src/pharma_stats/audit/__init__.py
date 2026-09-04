@@ -32,10 +32,13 @@ STAGE_REGISTRY = {
     "model": model.run,
 }
 
-# run order matches the pipeline's own data dependency order
+# run order matches the pipeline's own data dependency order.
+# label_sufficiency now runs AFTER features/model (moved 2026-09-04,
+# docs/decisions/0005): its lead-time bootstrap consumes model_flag_date
+# from the model stage's published result, not label_evidence_date.
 STAGE_ORDER = [
     "provenance", "universe", "history", "backfill", "differ",
-    "normalisation", "gold_set", "label_sufficiency", "features", "model",
+    "normalisation", "gold_set", "features", "model", "label_sufficiency",
 ]
 
 # A FAIL in one of these stages halts `--stage all` before running anything

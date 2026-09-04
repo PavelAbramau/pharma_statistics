@@ -61,6 +61,30 @@ def test_repeat_probe_never_fires_on_validation_queue():
     assert pid == "v0"
 
 
+def test_requeue_with_explicit_queue_name_ignores_current_active_queue():
+    """The TTL-stale-sweep case: a card served from auto_review must
+    requeue back into auto_review even if the reviewer has since
+    switched the active queue to main."""
+    session = q.new_session([], exclude_ids=set())
+    session["auto_review_order"] = []
+    session["order"] = []
+    q.switch_queue(session, "auto_review")
+    # ... time passes, reviewer switches back to main ...
+    q.switch_queue(session, "main")
+    q.requeue(session, "a1", queue_name="auto_review")
+    assert session["auto_review_order"] == ["a1"]
+    assert session["order"] == []
+
+
+def test_make_serve_token_records_origin_queue():
+    session = q.new_session([], exclude_ids=set())
+    q.switch_queue(session, "auto_review")
+    program = {"program_id": "p1", "band": 1, "primary_archetype": "other",
+               "silence_score": 10, "history_coverage": "full"}
+    token = q.make_serve_token(session, program, is_repeat=False)
+    assert session["pending_serve"][token]["origin_queue"] == "auto_review"
+
+
 def test_requeue_appends_to_active_queue():
     session = q.new_session([], exclude_ids=set())
     session["order"] = []
