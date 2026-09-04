@@ -13,9 +13,11 @@ import pytest
 from pharma_stats import snapshot as snap
 from pharma_stats.audit import __main__ as audit_main
 from pharma_stats.audit import differ as differ_stage
+from pharma_stats.audit import features as features_stage
 from pharma_stats.audit import gold_set, label_sufficiency, provenance, report, universe
 from pharma_stats.audit.types import Check
 from pharma_stats.differ.extract import EVIDENCE_EVENTS_SCHEMA
+from pharma_stats.finance import store as fstore
 from pharma_stats.history.index import HISTORY_INDEX_SCHEMA
 from pharma_stats.labelling import provisional_programs as pp
 from pharma_stats.labelling import store
@@ -694,3 +696,63 @@ def test_current_state_read_boundary_passes_when_only_whitelisted_calls(monkeypa
 
     checks = universe._current_state_read_boundary()
     assert checks[0].level == "PASS"
+
+
+def test_features_stage_fails_when_leakage_register_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(features_stage, "LEAKAGE_REGISTER", tmp_path / "does_not_exist.md")
+    monkeypatch.setattr(fstore, "WAREHOUSE_DB", tmp_path / "warehouse.duckdb")
+    checks = features_stage.run()
+    register_check = next(c for c in checks if "audit/leakage.md exists" in c.name)
+    assert register_check.level == "FAIL"
+
+
+def test_features_stage_fails_when_a_feature_is_unregistered(tmp_path, monkeypatch):
+    leakage_md = tmp_path / "leakage.md"
+    leakage_md.write_text("# Leakage register\n\nonly conviction_ratio is mentioned here.\n")
+    monkeypatch.setattr(features_stage, "LEAKAGE_REGISTER", leakage_md)
+    monkeypatch.setattr(fstore, "WAREHOUSE_DB", tmp_path / "warehouse.duckdb")
+
+    checks = features_stage.run()
+    register_check = next(c for c in checks if "registered in audit/leakage.md" in c.name)
+    assert register_check.level == "FAIL"
+    assert "estimated_cumulative_spend" in register_check.detail
+
+
+def test_features_stage_reports_empty_panel_when_financial_events_not_materialized(tmp_path, monkeypatch):
+    leakage_md = tmp_path / "leakage.md"
+    leakage_md.write_text("conviction_ratio and estimated_cumulative_spend, both registered.\n")
+    monkeypatch.setattr(features_stage, "LEAKAGE_REGISTER", leakage_md)
+    monkeypatch.setattr(fstore, "WAREHOUSE_DB", tmp_path / "warehouse.duckdb")
+
+    checks = features_stage.run()
+    panel_check = next(c for c in checks if "money-layer feature panel (conviction_ratio" in c.name)
+    assert panel_check.level == "INFO"
+    assert "0 rows" in panel_check.actual
+
+
+def test_features_stage_passes_and_reports_nan_rates_with_a_populated_panel(tmp_path, monkeypatch):
+    leakage_md = tmp_path / "leakage.md"
+    leakage_md.write_text("conviction_ratio and estimated_cumulative_spend, both registered.\n")
+    monkeypatch.setattr(features_stage, "LEAKAGE_REGISTER", leakage_md)
+    db_path = tmp_path / "warehouse.duckdb"
+    monkeypatch.setattr(fstore, "WAREHOUSE_DB", db_path)
+
+    fstore.append_records([
+        fstore.FinancialEvent(subject_type="program", subject_id="p1", event_date=date(2021, 1, 1),
+                               event_type="synthetic_cost_index_monthly", detail="", source="s", value=10.0),
+        fstore.FinancialEvent(subject_type="program", subject_id="p1", event_date=date(2021, 2, 1),
+                               event_type="conviction_ratio_monthly", detail="", source="s", value=1.5),
+    ], warehouse_db=db_path)
+
+    checks = features_stage.run()
+    leakage_probe = next(c for c in checks if "knowability_date is later than its as_of" in c.name)
+    assert leakage_probe.level == "PASS"
+
+    conviction_nan = next(c for c in checks if c.name == "conviction_ratio NaN rate")
+    assert "1/2 present" in conviction_nan.actual  # only the 2021-02 row has a conviction event
+
+    row_count = next(c for c in checks if "row count" in c.name)
+    assert "2 (program, month)" in row_count.actual
+
+    not_built = next(c for c in checks if "'features' pipeline stage" in c.name)
+    assert not_built.level == "INFO"

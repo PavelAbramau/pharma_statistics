@@ -1,7 +1,8 @@
 """Tests for attributes/matrix.py — B5 crowding/failure-density
-classification. The quadrant logic and population rule are the load-
-bearing parts; both get dedicated coverage since a mistake here directly
-misreports the graveyard quadrant, the actual deliverable."""
+classification. The quadrant logic, population rule, and the two
+exclude-entirely (never bucket) rules on the payload/tumour-system axes
+are the load-bearing parts; all get dedicated coverage since a mistake
+here directly misreports the graveyard cells, the actual deliverable."""
 from __future__ import annotations
 
 from pharma_stats.attributes import matrix as mx
@@ -94,34 +95,97 @@ def test_classify_quadrant_contested_and_hard_mixed_neither_dominant():
     assert mx.classify_quadrant(4, 3, min_n=5) == "contested_and_hard"
 
 
-def test_build_matrix_excludes_out_of_scope_and_groups_by_target_indication():
-    programs = [
-        {"program_id": "p1", "proposed_name": "Trastuzumab deruxtecan", "synonyms": [],
-         "trials": [], "history_coverage": "full", "band": 0},
-        {"program_id": "p2", "proposed_name": "Sacituzumab govitecan", "synonyms": [],
-         "trials": [], "history_coverage": "full", "band": 0},
-        {"program_id": "p3", "proposed_name": "Excluded Co", "synonyms": [],
-         "trials": [], "history_coverage": "full", "band": 0},
-    ]
-    import pharma_stats.attributes.matrix as mx_mod
-    from pharma_stats.labelling import store as gold_store
+def _program(pid, name, meshes_by_nct):
+    return {
+        "program_id": pid, "proposed_name": name, "synonyms": [],
+        "trials": [{"nct_id": nct} for nct in meshes_by_nct],
+        "history_coverage": "full", "band": 0,
+    }
 
+
+def _with_gold_and_mesh(monkeypatch, records, mesh_by_nct):
+    from pharma_stats.labelling import store as gold_store
+    from pharma_stats.attributes import tumour_system as tsys_mod
+
+    monkeypatch.setattr(gold_store, "load_records", lambda: records)
+    monkeypatch.setattr(
+        tsys_mod, "_condition_browse_data",
+        lambda nct_id: (mesh_by_nct.get(nct_id, []), []),
+    )
+
+
+def test_build_matrix_excludes_out_of_scope_and_groups_by_payload_and_system(monkeypatch):
+    # p1: trastuzumab deruxtecan -> camptothecin_topo1, breast (D001943)
+    # p2: sacituzumab govitecan -> camptothecin_topo1, gi_hepatobiliary (D015179, colorectal)
+    # p3: excluded via in_scope=no
+    programs = [
+        _program("p1", "Trastuzumab deruxtecan", ["NCT001"]),
+        _program("p2", "Sacituzumab govitecan", ["NCT002"]),
+        _program("p3", "Excluded Co", ["NCT003"]),
+    ]
     records = [
         _gold("p1", status="active"),
         _gold("p2", status="dead_confirmed", kill_reason="toxicity_safety"),
-        _gold("p3", in_scope="no"),  # excluded from population
+        _gold("p3", in_scope="no"),
     ]
-    orig_load = gold_store.load_records
-    gold_store.load_records = lambda: records
-    try:
-        cells, attrs = mx_mod.build_matrix(programs, min_n=1)
-    finally:
-        gold_store.load_records = orig_load
+    mesh_by_nct = {
+        "NCT001": [{"id": "D001943", "term": "Breast Neoplasms"}],
+        "NCT002": [{"id": "D015179", "term": "Colorectal Neoplasms"}],
+        "NCT003": [{"id": "D001943", "term": "Breast Neoplasms"}],
+    }
+    _with_gold_and_mesh(monkeypatch, records, mesh_by_nct)
+
+    cells, attrs, stats = mx.build_matrix(programs, min_n=1)
 
     assert "p3" not in attrs
     assert "p1" in attrs and "p2" in attrs
-    # both cluster under ERBB2/TACSTD2 respectively (antibody-stem dictionary), unknown indication (no MeSH data)
-    key1 = ("ERBB2", "unknown")
-    key2 = ("TACSTD2", "unknown")
+    key1 = ("camptothecin_topo1", "breast")
+    key2 = ("camptothecin_topo1", "gi_hepatobiliary")
     assert cells[key1].n_live == 1
     assert cells[key2].n_dead == 1
+    assert stats["n_in_population"] == 2
+
+
+def test_build_matrix_excludes_undisclosed_payload_entirely(monkeypatch):
+    # bare dev code -> no INN suffix -> "undisclosed" -> excluded, not bucketed
+    programs = [_program("p1", "XMT-1592", ["NCT001"])]
+    records = [_gold("p1", status="active")]
+    mesh_by_nct = {"NCT001": [{"id": "D001943", "term": "Breast Neoplasms"}]}
+    _with_gold_and_mesh(monkeypatch, records, mesh_by_nct)
+
+    cells, attrs, stats = mx.build_matrix(programs, min_n=1)
+
+    assert attrs == {}
+    assert cells == {}
+    assert stats["n_scope_confirmed"] == 1
+    assert stats["n_excluded_payload_undisclosed"] == 1
+    assert stats["n_excluded_system_unresolved"] == 0
+
+
+def test_build_matrix_excludes_unresolved_tumour_system_entirely(monkeypatch):
+    # only a generic root MeSH term on file -> no resolvable system -> excluded
+    programs = [_program("p1", "Trastuzumab deruxtecan", ["NCT001"])]
+    records = [_gold("p1", status="active")]
+    mesh_by_nct = {"NCT001": [{"id": "D009369", "term": "Neoplasms"}]}
+    _with_gold_and_mesh(monkeypatch, records, mesh_by_nct)
+
+    cells, attrs, stats = mx.build_matrix(programs, min_n=1)
+
+    assert attrs == {}
+    assert cells == {}
+    assert stats["n_excluded_payload_undisclosed"] == 0
+    assert stats["n_excluded_system_unresolved"] == 1
+
+
+def test_build_matrix_excludes_site_agnostic_histology_term(monkeypatch):
+    # "Carcinoma" is real "solid" data but names no body site -- must not
+    # become its own cell or fall into any of the 8 systems
+    programs = [_program("p1", "Trastuzumab deruxtecan", ["NCT001"])]
+    records = [_gold("p1", status="active")]
+    mesh_by_nct = {"NCT001": [{"id": "D002277", "term": "Carcinoma"}]}
+    _with_gold_and_mesh(monkeypatch, records, mesh_by_nct)
+
+    cells, attrs, stats = mx.build_matrix(programs, min_n=1)
+
+    assert attrs == {}
+    assert stats["n_excluded_system_unresolved"] == 1

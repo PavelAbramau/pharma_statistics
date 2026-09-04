@@ -69,6 +69,7 @@ def _lead_times_in_label_order(
     flag_date_by_program (program_id -> ISO date string) comes from
     models/ — a program with no entry there has no lead time to measure
     yet (the model never flagged it), not a zero."""
+def _lead_times_in_label_order(records: list[dict], sponsor_by_program: dict[str, str]) -> list[tuple[int, str]]:
     # gate 3 only: a gate 1/2 triage rejection was never a program, so it
     # must never count as a "label" toward this sufficiency bootstrap.
     non_repeat = sorted(
@@ -155,7 +156,7 @@ def run(flag_date_by_program: Optional[dict[str, str]] = None) -> list[Check]:
 
     records = store.load_records()
     programs = pp.load_materialized()
-    sponsor_by_program = {p["program_id"]: _lead_sponsor(p.get("sponsors_over_time") or []) for p in programs}
+    sponsor_by_program = {p["program_id"]: pp.lead_sponsor(p.get("sponsors_over_time") or []) for p in programs}
 
     observations = _lead_times_in_label_order(records, sponsor_by_program, flag_date_by_program)
 

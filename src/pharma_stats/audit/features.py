@@ -14,6 +14,7 @@ from pharma_stats.features.knowability import REGISTRY
 
 STAGE = "features"
 LEAKAGE_REGISTER = REPO_ROOT / "audit" / "leakage.md"
+REGISTERED_FEATURES = money_panel.FEATURE_NAMES
 
 
 def run() -> list[Check]:
