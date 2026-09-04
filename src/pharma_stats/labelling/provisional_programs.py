@@ -525,6 +525,21 @@ def _band_for_score(score: Optional[int]) -> Optional[int]:
     return len(SCORE_BANDS) - 1
 
 
+def lead_sponsor(sponsors_over_time: list[dict]) -> str:
+    """Whichever sponsor has the latest last_seen date — the "most
+    current" convention used everywhere a program needs a single sponsor
+    label (triage/evidence.py's lead_sponsor field, the sponsor-cluster
+    bootstraps in audit/label_sufficiency.py and stats/label_statistics.py).
+    Centralised here so every caller clusters the same program under the
+    same sponsor label. "UNKNOWN" (never None) when there's nothing to
+    go on, so callers can use it directly as a cluster key."""
+    if not sponsors_over_time:
+        return "UNKNOWN"
+    dated = [s for s in sponsors_over_time if s.get("last_seen")]
+    pool = dated or sponsors_over_time
+    return max(pool, key=lambda s: s.get("last_seen") or "")["sponsor"] or "UNKNOWN"
+
+
 def _has_evidence_events_table(con: duckdb.DuckDBPyConnection) -> bool:
     return bool(con.execute(
         "SELECT 1 FROM information_schema.tables WHERE table_name = 'evidence_events'"
