@@ -21,3 +21,4 @@ reports/*.md
 
 # Generated audit-harness reports (rebuild with python -m pharma_stats.audit)
 audit/*.md
+!audit/leakage.md
