@@ -65,10 +65,25 @@ def main() -> None:
         print(f"\nRunning backtest at cutoff={cutoff} (building each program's full panel once)...")
         panels = bt.build_program_panels(gate3_programs, con, cutoff=cutoff, panel_end=panel_end)
         print(f"Built {len(panels)} program panel(s).")
+
+        # Panel-coverage diagnostic: a truncation fix that's too
+        # aggressive can leave post-cutoff deaths with nothing to score
+        # against at all, in which case the curve above is silently
+        # starved of positives regardless of threshold. Checked directly
+        # rather than inferred from the curve's recall numbers.
+        post_cutoff_deaths = [p for p in panels if p.true_outcome == "dead"
+                               and p.true_event_date is not None and p.true_event_date > cutoff]
+        deaths_with_rows = [p for p in post_cutoff_deaths if p.post_cutoff_rows]
+        print(f"\n{len(post_cutoff_deaths)} 'dead' program(s) confirmed after {cutoff}; "
+              f"{len(deaths_with_rows)} have >=1 post-cutoff panel row "
+              f"({len(post_cutoff_deaths) - len(deaths_with_rows)} have none).")
+
         model_curve = bt.build_curve(gate3_programs, con, hazards["dead"], cutoff=cutoff, panel_end=panel_end,
                                       use_heuristic=False, panels=panels)
         heuristic_curve = bt.build_curve(gate3_programs, con, None, cutoff=cutoff, panel_end=panel_end,
                                           use_heuristic=True, panels=panels)
+        model_best = bt.best_precision_point(model_curve)
+        heuristic_best = bt.best_precision_point(heuristic_curve)
 
         # Fresh (non-cutoff, full-data) fit + flag dates at a fixed
         # threshold — this is what audit/label_sufficiency.py's cluster
@@ -90,7 +105,12 @@ def main() -> None:
     gate = bt.compare_at_matched_precision(model_curve, heuristic_curve, min_precision=args.min_precision)
 
     lines = ["# Model backtest", "", f"Cutoff: {cutoff}. Panel end: {panel_end}.", "",
-              "## Training event counts", ""]
+              "## Panel coverage (post-cutoff deaths)", "",
+              f"{len(post_cutoff_deaths)} 'dead' program(s) confirmed after {cutoff}; "
+              f"{len(deaths_with_rows)} have >=1 post-cutoff panel row "
+              f"({len(post_cutoff_deaths) - len(deaths_with_rows)} have none — these can never be "
+              "flagged at any threshold, by construction).",
+              "", "## Training event counts", ""]
     for oc in dts.OUTCOME_CLASSES:
         lines.append(f"- {oc}: {int(train_df[f'event_{oc}'].sum())} events")
     def _row(p) -> str:
@@ -98,15 +118,33 @@ def main() -> None:
         # nullable: n_flagged>0 with n_correct==0 gives a real precision
         # of 0.0 (not None) but no lead times to compute a median from.
         prec = f"{p.precision:.0%}" if p.precision is not None else "n/a"
+        rec = f"{p.recall:.0%}" if p.recall is not None else "n/a"
         lead = f"{p.median_lead_time_days:.0f}" if p.median_lead_time_days is not None else "n/a"
-        return f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | {prec} | {lead} |"
+        return f"| {p.threshold} | {p.n_flagged} | {p.n_correct} | {p.n_true_dead} | {prec} | {rec} | {lead} |"
+
+    def _best_line(label: str, best) -> str:
+        if best is None:
+            return f"- {label}: no threshold on this curve ever flags anything (precision undefined everywhere)."
+        prec = f"{best.precision:.0%}" if best.precision is not None else "n/a"
+        rec = f"{best.recall:.0%}" if best.recall is not None else "n/a"
+        lead = f"{best.median_lead_time_days:.0f}d" if best.median_lead_time_days is not None else "n/a"
+        return (f"- {label}: best precision {prec} at threshold={best.threshold} "
+                f"(n_flagged={best.n_flagged}, n_correct={best.n_correct}, recall={rec}, "
+                f"median lead time={lead}).")
 
     lines += ["", "## Model curve (dead, cause-specific hazard)", "",
-              "| threshold | n_flagged | n_correct | precision | median_lead_days |", "|---|---|---|---|---|"]
+              "Threshold sweep covers every observed predicted-hazard value post-cutoff "
+              "(not a fixed a-priori grid — see backtest.observed_model_thresholds).", "",
+              "| threshold | n_flagged | n_correct | n_true_dead | precision | recall | median_lead_days |",
+              "|---|---|---|---|---|---|---|"]
     lines += [_row(p) for p in model_curve]
+    lines += ["", _best_line("Model best-precision point", model_best)]
+
     lines += ["", "## Heuristic curve (silence-score band)", "",
-              "| band>= | n_flagged | n_correct | precision | median_lead_days |", "|---|---|---|---|---|"]
+              "| band>= | n_flagged | n_correct | n_true_dead | precision | recall | median_lead_days |",
+              "|---|---|---|---|---|---|---|"]
     lines += [_row(p) for p in heuristic_curve]
+    lines += ["", _best_line("Heuristic best-precision point", heuristic_best)]
 
     lines += ["", "## Audit gate", "", f"**{'PASS' if gate.passed else 'FAIL'}** — {gate.reason}", ""]
 
@@ -117,6 +155,11 @@ def main() -> None:
     out.write_text(text, encoding="utf-8")
     print(f"\nWrote {out}")
 
+    def _point_dict(p):
+        return {"threshold": p.threshold, "n_flagged": p.n_flagged, "n_correct": p.n_correct,
+                "n_true_dead": p.n_true_dead, "precision": p.precision, "recall": p.recall,
+                "median_lead_time_days": p.median_lead_time_days}
+
     result = {
         "generated_at": date.today().isoformat(),
         "cutoff": cutoff.isoformat(),
@@ -124,6 +167,12 @@ def main() -> None:
         "gate_passed": gate.passed,
         "gate_reason": gate.reason,
         "training_event_counts": {oc: int(train_df[f"event_{oc}"].sum()) for oc in dts.OUTCOME_CLASSES},
+        "post_cutoff_deaths": len(post_cutoff_deaths),
+        "post_cutoff_deaths_with_panel_rows": len(deaths_with_rows),
+        "model_curve": [_point_dict(p) for p in model_curve],
+        "heuristic_curve": [_point_dict(p) for p in heuristic_curve],
+        "model_best_precision_point": _point_dict(model_best) if model_best is not None else None,
+        "heuristic_best_precision_point": _point_dict(heuristic_best) if heuristic_best is not None else None,
         "flag_threshold": FLAG_THRESHOLD,
         "flag_date_by_program": flag_date_by_program,
     }
