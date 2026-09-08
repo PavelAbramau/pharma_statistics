@@ -1,0 +1,12 @@
+flowchart TB
+    ORG["Organization\nsponsor, dated ownership intervals"]
+    AST["Asset\npayload, linker, DAR, HGNC target"]
+    PRG["Program\nasset x OncoTree x line"]
+    TRL["Trial\nCT.gov record - evidence, not the unit"]
+    EV["EvidenceEvent\ntyped, dated, pointer back to raw/"]
+
+    ORG -->|"owns"| AST
+    AST --> PRG
+    PRG --- TRL
+    TRL --> EV
+    PRG --> EV

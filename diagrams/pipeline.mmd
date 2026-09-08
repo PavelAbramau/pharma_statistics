@@ -1,0 +1,74 @@
+flowchart TD
+    subgraph ingest["1. Ingest"]
+      CTGOV["ClinicalTrials.gov API v2"]
+      CLIENT["clients/ctgov.py"]
+      SNAP["snapshot.py\nwrite-once, SHA-256"]
+      RAW[("raw/*.json")]
+      MANIFEST[("manifest.duckdb\nget_as_of")]
+      CTGOV --> CLIENT --> SNAP --> RAW
+      SNAP --> MANIFEST
+    end
+
+    subgraph discover["2. Discover + backfill"]
+      DISCOVER["discovery/candidates.py\npattern + seed + sponsor"]
+      ASSETC[("asset_candidates")]
+      BACKFILL["history/orchestrator.py"]
+      HISTIDX[("history_index + version bodies")]
+      DISCOVER --> ASSETC --> BACKFILL --> HISTIDX
+    end
+
+    subgraph extract["3. Extract"]
+      DIFFER["differ"]
+      EVENTS[("evidence_events")]
+      COSTMODEL["finance/cost_model.py"]
+      FINEVENTS[("financial_events")]
+      DIFFER --> EVENTS
+      COSTMODEL --> FINEVENTS
+    end
+
+    subgraph label["4. Label"]
+      TRIAGE["triage Layer 1-3"]
+      STAGED[("staged_decisions.jsonl")]
+      PROVISIONAL["provisional_programs.py"]
+      APP["labelling app :8420"]
+      GOLD[("gold/labels.jsonl")]
+      TRIAGE --> STAGED
+      PROVISIONAL --> APP --> GOLD
+    end
+
+    subgraph detect["5. Detect"]
+      FEATPANEL["features/panel.py"]
+      TRAIN["discrete_time_survival.py"]
+      BACKTEST["backtest.py"]
+      MODELREPORT[("reports/model_backtest.md")]
+      FEATPANEL --> TRAIN --> BACKTEST --> MODELREPORT
+    end
+
+    subgraph productb["6. Product B"]
+      KRS["kill_reason_spend.py"]
+      MATRIX["attributes/matrix.py"]
+      MATRIXEXT["matrix_extension.py\nout of detector scope"]
+      MATRIXEXT --> MATRIX
+    end
+
+    RAW --> DISCOVER
+    HISTIDX --> DIFFER
+    RAW --> DIFFER
+    ASSETC --> COSTMODEL
+    ASSETC --> TRIAGE
+    ASSETC --> PROVISIONAL
+    HISTIDX --> PROVISIONAL
+    HISTIDX --> FEATPANEL
+    FINEVENTS --> FEATPANEL
+    GOLD --> TRAIN
+    GOLD --> KRS
+    FINEVENTS --> KRS
+    GOLD --> MATRIX
+    STAGED -.-> APP
+
+    AUDIT["audit --stage all"] -.-> RAW
+    AUDIT -.-> HISTIDX
+    AUDIT -.-> EVENTS
+    AUDIT -.-> GOLD
+    AUDIT -.-> FEATPANEL
+    AUDIT -.-> TRAIN

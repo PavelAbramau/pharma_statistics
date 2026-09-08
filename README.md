@@ -9,7 +9,10 @@ Project conventions live in [`CLAUDE.md`](CLAUDE.md). The five-entity model
 Decision records live in [`docs/decisions/`](docs/decisions/). An older
 as-built snapshot with corpus counts (2026-08-25) is
 [`diagrams/diagram.md`](diagrams/diagram.md) — numbers there drift; this
-README is the current map.
+README is the current map. The diagrams below also have standalone
+`.mmd` sources in [`diagrams/`](diagrams/) (`architecture.mmd`,
+`entities.mmd`, `pipeline.mmd`) if you want to paste one into a Mermaid
+editor to tweak it visually.
 
 ## What is built
 

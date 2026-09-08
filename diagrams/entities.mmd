@@ -1,0 +1,31 @@
+erDiagram
+    ORGANIZATION ||--o{ ASSET : owns
+    ASSET ||--o{ PROGRAM : splits_into
+    PROGRAM ||--o{ TRIAL : evidenced_by
+    TRIAL ||--o{ EVIDENCEEVENT : amendments
+    PROGRAM ||--o{ EVIDENCEEVENT : labels
+
+    ORGANIZATION {
+        string name
+        string sponsor_class
+    }
+    ASSET {
+        string payload_chemotype
+        string linker_chemistry
+        string target_antigen_HGNC
+        date first_in_human_date
+    }
+    PROGRAM {
+        string indication_code
+        string line_of_therapy
+        string status
+    }
+    TRIAL {
+        string nct_id
+        string registry
+    }
+    EVIDENCEEVENT {
+        string event_type
+        date event_date
+        string source_snapshot
+    }
