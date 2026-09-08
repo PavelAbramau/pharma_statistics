@@ -42,10 +42,12 @@ async function refreshSessionStats() {
   if ($("mainQueueN")) $("mainQueueN").textContent = s.main_queue_remaining ?? "–";
   if ($("valQueueN")) $("valQueueN").textContent = s.validation_queue_remaining ?? "–";
   if ($("autoReviewQueueN")) $("autoReviewQueueN").textContent = s.auto_review_queue_remaining ?? "–";
+  if ($("stratumGapQueueN")) $("stratumGapQueueN").textContent = s.stratum_gap_queue_remaining ?? "–";
   if ($("queueMainBtn") && $("queueValidationBtn")) {
     $("queueMainBtn").classList.toggle("active", s.active_queue === "main");
     $("queueValidationBtn").classList.toggle("active", s.active_queue === "validation");
     if ($("queueAutoReviewBtn")) $("queueAutoReviewBtn").classList.toggle("active", s.active_queue === "auto_review");
+    if ($("queueStratumGapBtn")) $("queueStratumGapBtn").classList.toggle("active", s.active_queue === "stratum_gap");
   }
   if ($("queueGate1")) $("queueGate1").textContent = s.queue_enter_gate1 ?? "–";
   if ($("queueGate3")) $("queueGate3").textContent = s.queue_enter_gate3 ?? "–";

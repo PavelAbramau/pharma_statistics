@@ -72,9 +72,13 @@ def spend_at_death_rows(dead_records: list[dict], panel: list[dict]) -> list[Kil
 def summarize_by_kill_reason(rows: list[KillReasonSpendRow]) -> dict[str, dict]:
     """Per kill_reason: n (all dead_confirmed programs with that reason),
     n_with_spend_data (the subset with a resolvable estimated_cumulative_
-    spend), and median/mean/min/max spend among that subset. Small-N
+    spend), and median/mean/min/max/IQR spend among that subset. Small-N
     summaries are reported as-is, never smoothed or hidden — recall over
-    precision, same as everywhere else in this project (CLAUDE.md)."""
+    precision, same as everywhere else in this project (CLAUDE.md).
+
+    q1_spend/q3_spend are None below 2 data points (a quartile of a
+    single value is not a meaningful spread — reported as None rather
+    than collapsed to that one value)."""
     counts: dict[str, int] = {}
     spends_by_reason: dict[str, list[float]] = {}
     for row in rows:
@@ -85,6 +89,10 @@ def summarize_by_kill_reason(rows: list[KillReasonSpendRow]) -> dict[str, dict]:
     out = {}
     for reason, n in counts.items():
         spends = spends_by_reason.get(reason, [])
+        if len(spends) >= 2:
+            q1, q3 = statistics.quantiles(spends, n=4, method="inclusive")[0::2]
+        else:
+            q1 = q3 = None
         out[reason] = {
             "n": n,
             "n_with_spend_data": len(spends),
@@ -92,5 +100,7 @@ def summarize_by_kill_reason(rows: list[KillReasonSpendRow]) -> dict[str, dict]:
             "mean_spend": statistics.mean(spends) if spends else None,
             "min_spend": min(spends) if spends else None,
             "max_spend": max(spends) if spends else None,
+            "q1_spend": q1,
+            "q3_spend": q3,
         }
     return out

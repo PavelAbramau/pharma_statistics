@@ -100,6 +100,14 @@ class Cell:
     tumour_system: str
     live_programs: list[dict] = field(default_factory=list)
     dead_programs: list[dict] = field(default_factory=list)
+    # Matrix-only universe extension (docs/decisions/0008) — dead_historical
+    # programs from discovery/matrix_extension.py, kept in a SEPARATE list
+    # rather than folded into dead_programs: those are gold/proxy-based,
+    # this is a deterministic inference over a cohort that was never gold-
+    # labelled at all. n_live/n_dead/total deliberately exclude this list
+    # so every existing quadrant/population computation is unaffected by
+    # whether the extension cohort has been merged in or not.
+    dead_historical_programs: list[dict] = field(default_factory=list)
 
     @property
     def n_live(self) -> int:
@@ -108,6 +116,10 @@ class Cell:
     @property
     def n_dead(self) -> int:
         return len(self.dead_programs)
+
+    @property
+    def n_dead_historical(self) -> int:
+        return len(self.dead_historical_programs)
 
     @property
     def total(self) -> int:

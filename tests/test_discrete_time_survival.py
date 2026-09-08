@@ -90,6 +90,7 @@ def test_fit_cause_specific_hazard_uses_covariates_above_min_events():
     df = pd.DataFrame({
         "silence_score_asof": silence,
         "log_cost_index": rng.uniform(0, 5, n),
+        "log_conviction_ratio": rng.uniform(0, 2, n),
         "sponsor": rng.integers(0, 15, n),
         "event_dead": events,
     })
@@ -99,6 +100,32 @@ def test_fit_cause_specific_hazard_uses_covariates_above_min_events():
     preds = hazard.predict(df)
     assert len(preds) == n
     assert (preds >= 0).all() and (preds <= 1).all()
+
+
+def test_fit_cause_specific_hazard_drops_rows_missing_a_covariate_never_imputes():
+    """conviction_ratio (and its log transform) is None whenever a
+    program-month has no usable peer group — never imputed as 0 or 1
+    (docs/decisions/0004). Rows missing it must be complete-case dropped
+    from the fit, not fabricated, and n_events must describe the fitted
+    subset."""
+    rng = np.random.default_rng(1)
+    n = 300
+    silence = rng.uniform(0, 100, n)
+    p_event = 1 / (1 + np.exp(-(0.03 * silence - 3)))
+    events = (rng.random(n) < p_event).astype(int)
+    log_conviction = rng.uniform(0, 2, n)
+    log_conviction[:30] = np.nan  # 30 program-months with no usable peer group
+    df = pd.DataFrame({
+        "silence_score_asof": silence,
+        "log_cost_index": rng.uniform(0, 5, n),
+        "log_conviction_ratio": log_conviction,
+        "sponsor": rng.integers(0, 15, n),
+        "event_dead": events,
+    })
+    assert df["event_dead"].sum() >= dts.MIN_EVENTS_FOR_COVARIATES
+    hazard = dts.fit_cause_specific_hazard(df, "event_dead")
+    assert hazard.covariates == dts.COVARIATES
+    assert hazard.n_events == int(df["event_dead"][30:].sum())  # only the complete-case subset counted
 
 
 def test_build_training_table_marks_only_terminal_row_as_event(monkeypatch):
@@ -114,10 +141,10 @@ def test_build_training_table_marks_only_terminal_row_as_event(monkeypatch):
 
     fake_rows = [
         {"program_id": "p1", "as_of": "2020-01-01", "silence_score_asof": 10, "band_asof": 0,
-         "cost_index": 100.0, "contacts_locations_amendment_cadence_asof": 0.0,
+         "cost_index": 100.0, "conviction_ratio": None, "contacts_locations_amendment_cadence_asof": 0.0,
          "target": "ERBB2", "payload_chemotype": "camptothecin_topo1", "indication_mesh_term": "unknown"},
         {"program_id": "p1", "as_of": "2021-06-01", "silence_score_asof": 80, "band_asof": 3,
-         "cost_index": 500.0, "contacts_locations_amendment_cadence_asof": 0.0,
+         "cost_index": 500.0, "conviction_ratio": 1.2, "contacts_locations_amendment_cadence_asof": 0.0,
          "target": "ERBB2", "payload_chemotype": "camptothecin_topo1", "indication_mesh_term": "unknown"},
     ]
     monkeypatch.setattr(dts, "build_program_month_panel", lambda program, con, end=None: fake_rows)

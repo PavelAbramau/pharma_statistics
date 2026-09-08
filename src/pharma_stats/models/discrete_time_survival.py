@@ -38,7 +38,16 @@ from pharma_stats.features.panel import build_program_month_panel
 from pharma_stats.labelling import store
 
 OUTCOME_CLASSES = ("dead", "approved", "superseded")
-COVARIATES = ["silence_score_asof", "log_cost_index"]  # kept deliberately small — see module docstring
+# kept deliberately small — see module docstring. log_conviction_ratio added
+# 2026-09-08: registered in features/knowability.py and audit/leakage.md
+# since the money layer landed, but never actually reached this covariate
+# set until now. Unlike silence_score_asof (imputed 0.0 when unresolvable),
+# a missing conviction_ratio is never imputed as 0 or 1 (docs/decisions/0004,
+# audit/leakage.md's conviction_ratio entry) — rows lacking it are dropped
+# from any fit that uses it as a covariate instead (see
+# fit_cause_specific_hazard), and score as NaN (never flagged) at predict
+# time for the same reason.
+COVARIATES = ["silence_score_asof", "log_cost_index", "log_conviction_ratio"]
 MIN_EVENTS_FOR_COVARIATES = 10  # below this, fit intercept-only rather than report spurious coefficients
 
 
@@ -129,6 +138,11 @@ def build_training_table(
     if n_missing:
         print(f"  (imputing {n_missing} row(s) with no resolvable silence_score_asof to 0.0)")
     df["silence_score_asof"] = df["silence_score_asof"].fillna(0.0).astype(float)
+    # conviction_ratio is None whenever a program-month has no usable
+    # peer denominator (docs/decisions/0004) — left as NaN here, never
+    # imputed, and dropped only from the fits that actually use it as a
+    # covariate (fit_cause_specific_hazard), not from the table itself.
+    df["log_conviction_ratio"] = np.log1p(df["conviction_ratio"].astype(float))
     return df
 
 
@@ -151,19 +165,37 @@ def fit_cause_specific_hazard(df: pd.DataFrame, outcome_col: str) -> CauseSpecif
     """Logit(event ~ covariates), cluster-robust SEs by sponsor. Falls
     back to an intercept-only fit when there are too few events to
     support covariates (MIN_EVENTS_FOR_COVARIATES) — see module
-    docstring on why superseded (3 events) can't support any covariate."""
+    docstring on why superseded (3 events) can't support any covariate.
+
+    A covariate with real missingness (log_conviction_ratio — no usable
+    peer comparison some months) can't be handed to statsmodels as NaN
+    (MissingDataError) and must never be imputed as 0/1 either (module
+    docstring), so rows missing ANY in-use covariate are complete-case
+    dropped from the fit itself — n_events/n_dropped below describe that
+    fitted subset, not the full input table, so the report can say
+    honestly how much data the covariate cost."""
     outcome_name = outcome_col.replace("event_", "")
-    n_events = int(df[outcome_col].sum())
-    use_covariates = n_events >= MIN_EVENTS_FOR_COVARIATES
+    n_events_full = int(df[outcome_col].sum())
+    use_covariates = n_events_full >= MIN_EVENTS_FOR_COVARIATES
 
     covariates = list(COVARIATES) if use_covariates else []
     if covariates:
-        X = sm.add_constant(df[covariates])
+        fit_df = df.dropna(subset=covariates)
+        n_dropped = len(df) - len(fit_df)
+        if n_dropped:
+            print(f"  ({outcome_name}: dropping {n_dropped} row(s) with a missing covariate value "
+                  f"— most likely log_conviction_ratio's peer-comparison gaps — from the fit, "
+                  "never imputed)")
+        X = sm.add_constant(fit_df[covariates])
+        y = fit_df[outcome_col]
+        groups = fit_df["sponsor"]
     else:
         X = sm.add_constant(pd.DataFrame(index=df.index))  # intercept-only
-    y = df[outcome_col]
+        y = df[outcome_col]
+        groups = df["sponsor"]
     model = sm.Logit(y, X)
-    result = model.fit(disp=0, cov_type="cluster", cov_kwds={"groups": df["sponsor"]})
+    result = model.fit(disp=0, cov_type="cluster", cov_kwds={"groups": groups})
+    n_events = int(y.sum())
     return CauseSpecificHazard(outcome=outcome_name, n_events=n_events, covariates=covariates, result=result)
 
 

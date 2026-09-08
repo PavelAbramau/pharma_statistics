@@ -1,6 +1,6 @@
 """B1: kill reason vs. spend — report.
 
-    python scripts/report_kill_reason_vs_spend.py
+    python scripts/report_kill_reason_spend.py
 
 Answers the question docs/decisions/0004 exists to keep honest: "did this
 program die cheap or expensive," never "did it die for a good reason."
@@ -38,13 +38,15 @@ def render(rows: list[krs.KillReasonSpendRow], summary: dict[str, dict]) -> str:
         "by the stated reason — never a claim that spend caused, or should have prevented, any "
         "one outcome.",
         "",
-        "| kill_reason | n | n with spend data | median spend | mean spend | min | max |",
-        "|---|---|---|---|---|---|---|",
+        "| kill_reason | n | n with spend data | median spend | IQR (Q1–Q3) | mean spend | min | max |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for reason in sorted(summary, key=lambda r: -summary[r]["n"]):
         s = summary[reason]
+        iqr = (f"{_fmt(s['q1_spend'])}–{_fmt(s['q3_spend'])}"
+               if s["q1_spend"] is not None else "— (n<2)")
         lines.append(
-            f"| {reason} | {s['n']} | {s['n_with_spend_data']} | {_fmt(s['median_spend'])} | "
+            f"| {reason} | {s['n']} | {s['n_with_spend_data']} | {_fmt(s['median_spend'])} | {iqr} | "
             f"{_fmt(s['mean_spend'])} | {_fmt(s['min_spend'])} | {_fmt(s['max_spend'])} |"
         )
     lines.append("")
@@ -77,7 +79,7 @@ def main() -> None:
     print(text)
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out = REPORTS_DIR / "kill_reason_vs_spend.md"
+    out = REPORTS_DIR / "kill_reason_spend.md"
     out.write_text(text, encoding="utf-8")
     print(f"Wrote {out}")
 

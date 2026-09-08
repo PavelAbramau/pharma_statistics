@@ -69,7 +69,10 @@ def build_stratified_order(programs: list[dict], exclude_ids: set[str]) -> list[
     return order
 
 
-QUEUE_KEYS = {"main": "order", "validation": "validation_order", "auto_review": "auto_review_order"}
+QUEUE_KEYS = {
+    "main": "order", "validation": "validation_order", "auto_review": "auto_review_order",
+    "stratum_gap": "stratum_gap_order",
+}
 # auto_review programs already have a gold record (an auto-decided one
 # under review) — serving them needs the same "already reviewed, serve
 # anyway" bypass as an explicit reopen (see app.py's /api/next).
@@ -83,6 +86,7 @@ def new_session(programs: list[dict], exclude_ids: set[str]) -> dict:
         "order": build_stratified_order(programs, exclude_ids),
         "validation_order": [],
         "auto_review_order": [],
+        "stratum_gap_order": [],
         "active_queue": "main",
         "total_served": 0,
         "pending_serve": {},

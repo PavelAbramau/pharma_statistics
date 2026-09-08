@@ -95,10 +95,15 @@ def test_summarize_by_kill_reason_computes_median_and_counts():
     assert summary["futility_efficacy"]["n"] == 2
     assert summary["futility_efficacy"]["n_with_spend_data"] == 2
     assert summary["futility_efficacy"]["median_spend"] == 200.0
+    assert summary["futility_efficacy"]["q1_spend"] == 150.0
+    assert summary["futility_efficacy"]["q3_spend"] == 250.0
 
     assert summary["strategic_portfolio"]["n"] == 2
     assert summary["strategic_portfolio"]["n_with_spend_data"] == 1
     assert summary["strategic_portfolio"]["median_spend"] == 10.0
+    # a single data point has no meaningful spread -- None, not 10.0
+    assert summary["strategic_portfolio"]["q1_spend"] is None
+    assert summary["strategic_portfolio"]["q3_spend"] is None
 
 
 def test_summarize_by_kill_reason_handles_reason_with_zero_spend_data():
@@ -107,3 +112,5 @@ def test_summarize_by_kill_reason_handles_reason_with_zero_spend_data():
     assert summary["unknown_silent"]["n"] == 1
     assert summary["unknown_silent"]["n_with_spend_data"] == 0
     assert summary["unknown_silent"]["median_spend"] is None
+    assert summary["unknown_silent"]["q1_spend"] is None
+    assert summary["unknown_silent"]["q3_spend"] is None

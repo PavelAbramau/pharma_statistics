@@ -1,0 +1,38 @@
+[
+  {
+    "program_id": "mx-ext-cand_667b31dd5d_vls-101",
+    "proposed_name": "Zilovertamab Vedotin",
+    "synonyms": [
+      "MK-2140",
+      "VLS-101",
+      "Zilovertamab vedotin"
+    ],
+    "sponsors": [
+      "Merck Sharp & Dohme LLC",
+      "VelosBio Inc., a subsidiary of Merck & Co., Inc. (Rahway, New Jersey USA)"
+    ],
+    "nct_ids": [
+      "NCT03833180",
+      "NCT04504916",
+      "NCT05139017",
+      "NCT05144841",
+      "NCT05406401",
+      "NCT05458297",
+      "NCT05562830",
+      "NCT06395103",
+      "NCT06717347",
+      "NCT06890884"
+    ],
+    "trial_start_dates": [
+      "2019-03-14",
+      "2025-04-11"
+    ],
+    "target": "ROR1",
+    "payload_chemotype": "auristatin",
+    "tumour_bucket": "heme",
+    "extension_reasons": [
+      "heme"
+    ],
+    "dead_historical": null
+  }
+]

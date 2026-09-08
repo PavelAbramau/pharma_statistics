@@ -389,6 +389,39 @@ def kill_reason_divergence_sample_summary(programs: list[dict], records: list[di
     }
 
 
+def agreement_rate_sample_ci(
+    programs: list[dict], records: list[dict], *, n_resamples: int = BOOTSTRAP_RESAMPLES, seed: int = 0,
+) -> dict:
+    """Sponsor-cluster-bootstrap 95% CI on the RAW (unweighted) stated-
+    vs-true kill-reason agreement rate among labelled dead_confirmed
+    programs — describes the gold set as sampled, same scope as
+    kill_reason_divergence_sample_summary's point estimate, just with an
+    interval around it. Never requires stratum coverage (unlike
+    weighted_kill_reason_divergence_ci): every observation gets equal
+    weight 1.0, since this doesn't claim to speak for the corpus.
+
+    Same cluster-bootstrap machinery as bootstrap_weighted_share_ci
+    (_cluster_bootstrap_share resamples sponsors, not programs — ICC=0.18
+    reasoning is identical, see module docstring), just unweighted."""
+    rows = stated_vs_true_kill_reason_sample_rows(programs, records)
+    sponsor_by_pid = {p["program_id"]: pp.lead_sponsor(p.get("sponsors_over_time") or []) for p in programs}
+
+    observations = [
+        (sponsor_by_pid.get(r["program_id"], "UNKNOWN"), 1.0, r["stated_kill_reason"] == r["true_kill_reason"])
+        for r in rows
+    ]
+    rng = random.Random(seed)
+    shares = _cluster_bootstrap_share(observations, rng, n_resamples)
+    lo, hi = _percentile_ci(shares)
+    n_sponsors = len({s for s, _, _ in observations})
+    n_agree = sum(1 for _, _, in_cat in observations if in_cat)
+    return {
+        "point_estimate": (n_agree / len(observations)) if observations else None,
+        "ci_lo": lo, "ci_hi": hi,
+        "n": len(observations), "n_sponsors": n_sponsors, "n_resamples": n_resamples,
+    }
+
+
 def weighted_kill_reason_divergence_ci(
     programs: list[dict], records: list[dict], *, n_resamples: int = BOOTSTRAP_RESAMPLES, seed: int = 0,
 ) -> dict:
@@ -446,6 +479,8 @@ def summary(programs: list[dict], records: list[dict]) -> dict:
     out: dict = {
         "n_gate3_labels": len(gate3_labels_by_program(records)),
         "kill_reason_divergence_sample": kill_reason_divergence_sample_summary(programs, records),
+        "kill_reason_divergence_sample_rows": stated_vs_true_kill_reason_sample_rows(programs, records),
+        "agreement_rate_sample_ci": agreement_rate_sample_ci(programs, records),
     }
     try:
         weights = compute_stratum_weights(programs, records)

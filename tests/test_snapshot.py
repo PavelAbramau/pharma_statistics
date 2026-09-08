@@ -74,6 +74,39 @@ def test_get_as_of_returns_most_recent_at_or_before(store):
     assert snap.get_as_of("ctgov", "NCT001", date(2021, 1, 1), manifest_db=manifest_db).body == "v3"
 
 
+def test_get_as_of_returns_none_before_manifest_exists(store):
+    """get_as_of/all_ids must never crash just because nothing's been
+    fetched yet — DuckDB's read_only mode refuses to create a file that
+    doesn't exist, so this has to be handled explicitly, not left to
+    raise."""
+    _, manifest_db = store
+    assert not manifest_db.exists()
+    assert snap.get_as_of("ctgov", "NCT001", date(2020, 1, 1), manifest_db=manifest_db) is None
+    assert snap.all_ids("ctgov", manifest_db=manifest_db) == []
+
+
+def test_get_as_of_does_not_take_a_write_lock(store):
+    """Real incident (2026-09-04): get_as_of opened a read-write
+    connection for a pure SELECT, so two purely-reading callers (e.g. a
+    backtest and a report script) would collide on the manifest's
+    exclusive lock as if one of them were writing. Two simultaneous
+    get_as_of connections must be able to coexist — this is the
+    regression test for the read_only fix, not just a happy-path check."""
+    raw_dir, manifest_db = store
+    snap.save_snapshot("ctgov", "NCT001", "u", "v1", fetched_at=_dt("2020-01-01T00:00:00"),
+                        raw_dir=raw_dir, manifest_db=manifest_db)
+
+    con_a = snap._manifest_con_read_only(manifest_db)
+    try:
+        # con_a is still open (simulating one long-lived reader) while a
+        # second, independent get_as_of call runs concurrently — this
+        # must succeed, not raise duckdb.IOException.
+        result = snap.get_as_of("ctgov", "NCT001", date(2020, 6, 1), manifest_db=manifest_db)
+        assert result.body == "v1"
+    finally:
+        con_a.close()
+
+
 def test_rebuild_manifest_reindexes_from_disk(store):
     raw_dir, manifest_db = store
     snap.save_snapshot("ctgov", "NCT001", "u", "v1", fetched_at=_dt("2020-01-01T00:00:00"),

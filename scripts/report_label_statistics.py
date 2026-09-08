@@ -104,6 +104,48 @@ def _render(summary: dict) -> str:
     lines += ["", "Confusion (stated x true), raw counts:"]
     for key, n in sorted(s["confusion_matrix"].items(), key=lambda kv: -kv[1]):
         lines.append(f"- {key}: {n}")
+
+    a = summary["agreement_rate_sample_ci"]
+    lines += [
+        "",
+        "### Raw agreement rate, sponsor-cluster-bootstrap 95% CI (sample, unweighted)",
+        "",
+        f"- point estimate: {a['point_estimate']:.1%}" if a["point_estimate"] is not None
+        else "- point estimate: n/a",
+        f"- 95% CI: [{a['ci_lo']:.1%}, {a['ci_hi']:.1%}]" if a["ci_lo"] is not None else "- 95% CI: n/a",
+        f"- n={a['n']}, n_sponsors={a['n_sponsors']}, resamples={a['n_resamples']}",
+    ]
+
+    rows = summary["kill_reason_divergence_sample_rows"]
+    not_stated = [r for r in rows if r["stated_kill_reason"] is None]
+    classified = [r for r in rows if r["stated_kill_reason"] is not None]
+    lines += [
+        "",
+        "### Every case, raw why_stopped text next to both kill-reason labels "
+        f"(n={len(rows)})",
+        "",
+        f"{len(not_stated)} of {len(rows)} have no usable why_stopped text at all "
+        "(blank, or under the 15-char floor) — these need no classifier judgement "
+        "call and can't be a source of classifier-manufactured disagreement; listed "
+        "separately below, not mixed in with the classified cases.",
+        "",
+        f"#### Classified cases (n={len(classified)}) — stated_kill_reason came from "
+        "the keyword classifier",
+        "",
+    ]
+    for r in sorted(classified, key=lambda r: r["program_id"]):
+        agree = "AGREE" if r["stated_kill_reason"] == r["true_kill_reason"] else "disagree"
+        lines.append(
+            f"- **{r['program_id']}** [{agree}] true={r['true_kill_reason']} "
+            f"stated={r['stated_kill_reason']} — why_stopped: "
+            f"\"{r['why_stopped_text']}\""
+        )
+    lines += ["", f"#### not_stated cases (n={len(not_stated)}) — no why_stopped text to classify", ""]
+    for r in sorted(not_stated, key=lambda r: r["program_id"]):
+        text = r["why_stopped_text"]
+        shown = f"\"{text}\"" if text else "(empty)"
+        lines.append(f"- **{r['program_id']}** true={r['true_kill_reason']} — why_stopped: {shown}")
+
     lines.append("")
     return "\n".join(lines)
 

@@ -8,6 +8,13 @@ attached once per program, same value on every row — see
 attributes/target.py, attributes/payload.py, attributes/indication.py
 and docs/decisions/0001 for why those are safe to read once rather than
 per-month.
+
+``conviction_ratio`` is read straight from financial_events'
+conviction_ratio_monthly (raw, exact-month value, no forward-fill) --
+already registered in features/knowability.py and audit/leakage.md but
+unwired here until now, so it never reached discrete_time_survival.py's
+covariate set. Per docs/decisions/0004 it is a conviction signal, not a
+quality one.
 """
 from __future__ import annotations
 
@@ -25,6 +32,9 @@ from pharma_stats.finance import cost_model as cm
 from pharma_stats.labelling.provisional_programs import compute_silence_score, _band_for_score
 
 
+CONVICTION_EVENT_TYPE = "conviction_ratio_monthly"
+
+
 def _month_range(start: date, end: date) -> list[date]:
     months = []
     cursor = start.replace(day=1)
@@ -33,6 +43,29 @@ def _month_range(start: date, end: date) -> list[date]:
         year, month = cursor.year, cursor.month
         cursor = date(year + (month // 12), (month % 12) + 1, 1)
     return months
+
+
+def _conviction_by_month(program_id: str, con: duckdb.DuckDBPyConnection) -> dict[date, float]:
+    """Raw conviction_ratio_monthly financial_events value for this
+    program, exact month only -- never forward-filled (unlike
+    finance.panel's estimated_cumulative_spend). Matches the "exposed
+    as-is for the months it exists" contract audit/leakage.md and
+    features/knowability.py's conviction_ratio entry already document;
+    None for a month with no usable peer denominator, never guessed as 0
+    or 1 (docs/decisions/0004: conviction is a signal, not a quality
+    claim, and a missing comparison is not the same fact as "no
+    conviction")."""
+    exists = con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = 'financial_events'"
+    ).fetchone()[0]
+    if not exists:
+        return {}
+    rows = con.execute(
+        "SELECT event_date, value FROM financial_events "
+        "WHERE subject_id = ? AND event_type = ? AND value IS NOT NULL",
+        [program_id, CONVICTION_EVENT_TYPE],
+    ).fetchall()
+    return {d: v for d, v in rows}
 
 
 def build_program_month_panel(
@@ -56,6 +89,8 @@ def build_program_month_panel(
     earliest = min((h[0]["posted_date"] for h in histories.values() if h), default=None)
     if earliest is None:
         return []
+
+    conviction_by_month = _conviction_by_month(program["program_id"], con)
 
     name = program.get("proposed_name")
     synonyms = program.get("synonyms") or []
@@ -91,6 +126,7 @@ def build_program_month_panel(
             "silence_score_asof": silence_score,
             "band_asof": band,
             "cost_index": cost_index,
+            "conviction_ratio": conviction_by_month.get(month),
             "contacts_locations_amendment_cadence_asof": cadence,
             "target": target or "undisclosed",
             "payload_chemotype": payload_chemotype,

@@ -35,17 +35,24 @@ import duckdb
 from pharma_stats import snapshot as snap
 from pharma_stats.labelling.provisional_programs import _study_from_body
 
-# snapshot.get_as_of/.latest open a fresh, exclusive-locking DuckDB
-# connection to manifest.duckdb on every call — fine for occasional use,
-# but this module calls it thousands of times building a full monthly
-# series, and collided for real with a concurrent pytest run (both
-# holding/requesting the lock at the same real millisecond). A live
-# labelling app session resolving snapshots at the same time would hit
-# the same conflict. Retrying a few times with a short backoff is safe
-# here (a read-only lookup, no risk of a partial write) and avoids
-# forcing a change to snapshot.py's concurrency behaviour project-wide.
-_LOCK_RETRY_ATTEMPTS = 5
-_LOCK_RETRY_DELAY_SECONDS = 0.5
+# Historical note (2026-09-04): this retry wrapper was originally papering
+# over a real bug — snapshot.get_as_of/.latest opened a read-write,
+# exclusive-locking connection for a pure SELECT, so two purely-reading
+# callers (this module and, say, a report script) collided with each
+# other as if one were writing. That's now fixed at the root:
+# get_as_of/all_ids always open manifest.duckdb read_only, and DuckDB
+# lets any number of read_only connections coexist — see
+# snapshot._manifest_con_read_only. Reader-vs-reader contention should no
+# longer happen at all.
+#
+# What's left, and what this retry still guards against, is the
+# unavoidable case: this module's lookup landing at the exact moment an
+# actual writer (save_snapshot, rebuild_manifest) holds its brief,
+# genuinely-exclusive write lock. That's rare and short-lived, so a
+# retry with backoff remains the right tool for it — a read-only lookup
+# has no risk of a partial write, so retrying is always safe.
+_LOCK_RETRY_ATTEMPTS = 20
+_LOCK_RETRY_DELAY_SECONDS = 1.5
 
 
 def _snap_latest_with_retry(snap_id: str):
