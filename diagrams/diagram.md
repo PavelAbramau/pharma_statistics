@@ -1,6 +1,9 @@
 ---
-title: pharma_statistics — ADC Silent Signals pipeline as built (2026-08-25)
+title: pharma_statistics — ADC Silent Signals pipeline as built (2026-08-25 snapshot)
 ---
+%% Corpus counts in this file are a 2026-08-25 snapshot. Current architecture
+%% and pipeline: README.md. "NOT BUILT" subgraph is stale — features, model,
+%% and Product B slices exist; see the README status table.
 flowchart TD
 
 %% ============ SOURCES ============

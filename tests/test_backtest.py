@@ -27,6 +27,7 @@ def test_model_flag_dates_from_panels_handles_none_silence_score():
     train_df = pd.DataFrame({
         "silence_score_asof": rng.uniform(0, 100, n),
         "log_cost_index": rng.uniform(0, 5, n),
+        "log_conviction_ratio": rng.uniform(0, 2, n),
         "cost_index": rng.uniform(0, 100, n),
         "sponsor": rng.integers(0, 10, n),
         "event_dead": [1] * 12 + [0] * (n - 12),
@@ -36,13 +37,33 @@ def test_model_flag_dates_from_panels_handles_none_silence_score():
     panel = bt.ProgramPanel(
         program_id="p1",
         post_cutoff_rows=[
-            {"as_of": "2023-01-01", "silence_score_asof": None, "band_asof": None, "cost_index": None},
-            {"as_of": "2023-02-01", "silence_score_asof": 50.0, "band_asof": 2, "cost_index": 10.0},
+            {"as_of": "2023-01-01", "silence_score_asof": None, "band_asof": None, "cost_index": None,
+             "conviction_ratio": None},
+            {"as_of": "2023-02-01", "silence_score_asof": 50.0, "band_asof": 2, "cost_index": 10.0,
+             "conviction_ratio": 1.1},
         ],
         true_outcome="dead", true_event_date=date(2023, 3, 1),
     )
     flags = bt.model_flag_dates_from_panels([panel], hazard, threshold=0.01)
     assert "p1" in flags  # must not raise
+
+
+def test_observed_model_thresholds_excludes_nan_and_stays_sorted():
+    """Real bug found 2026-09-08: a NaN prediction (a program-month
+    missing a covariate that isn't knowable that month, e.g.
+    log_conviction_ratio with no usable peer group) sorted alongside real
+    floats doesn't just leave NaN in an arbitrary spot -- Python's sort
+    has no defined total order once NaN is mixed in, and silently
+    scrambled the REAL thresholds around it too on real data. NaN must
+    never reach the threshold set at all."""
+    predictions = {
+        "p1": ([date(2023, 1, 1), date(2023, 2, 1)], [0.05, float("nan")]),
+        "p2": ([date(2023, 1, 1)], [0.02]),
+        "p3": ([date(2023, 1, 1)], [float("nan")]),
+    }
+    thresholds = bt.observed_model_thresholds(predictions)
+    assert thresholds == [0.02, 0.05]
+    assert thresholds == sorted(thresholds)
 
 
 def test_precision_lead_time_curve_basic():

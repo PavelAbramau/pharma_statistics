@@ -1,0 +1,37 @@
+{
+  "cand_1cfec7752c_ags-22ce": {
+    "target": "NECTIN4",
+    "chembl_id": "CHEMBL3301589",
+    "matched_name": "AGS-22CE",
+    "matched_via": "molecule_synonyms",
+    "mechanism_of_action": "Nectin-4 binding agent"
+  },
+  "cand_436117ed3f_mln0264": {
+    "target": "GUCY2C",
+    "chembl_id": "CHEMBL4298045",
+    "matched_name": "Mln0264",
+    "matched_via": "molecule_synonyms",
+    "mechanism_of_action": "Heat-stable enterotoxin receptor binding agent"
+  },
+  "cand_4f02a9aa6b_dlye5953a": {
+    "target": "LY6E",
+    "chembl_id": "CHEMBL4297935",
+    "matched_name": "Dlye5953a",
+    "matched_via": "molecule_synonyms",
+    "mechanism_of_action": "Lymphocyte antigen 6E binding agent"
+  },
+  "cand_52ce390c83_ro5541081": {
+    "target": "SLC34A2",
+    "chembl_id": "CHEMBL4297938",
+    "matched_name": "Dnib0600a",
+    "matched_via": "molecule_synonyms",
+    "mechanism_of_action": "Sodium-dependent phosphate transport protein 2B binding agent"
+  },
+  "cand_7fada4a29e_camidanlumab_tesirine": {
+    "target": "IL2RA",
+    "chembl_id": "CHEMBL4297871",
+    "matched_name": "CAMIDANLUMAB TESIRINE",
+    "matched_via": "pref_name",
+    "mechanism_of_action": "Interleukin-2 receptor alpha chain binding agent"
+  }
+}

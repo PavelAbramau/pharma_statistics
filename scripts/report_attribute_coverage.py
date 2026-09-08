@@ -51,7 +51,9 @@ def main() -> None:
     try:
         payload_undisclosed = []
         target_unresolved = []
-        target_source_counts = {"antibody_stem": 0, "trial_text": 0, "name": 0, "unresolved": 0}
+        target_source_counts = {
+            "antibody_stem": 0, "trial_text": 0, "name": 0, "trial_text_majority": 0, "unresolved": 0,
+        }
         payload_resolved = 0
 
         for p in scoped:
@@ -92,6 +94,8 @@ def main() -> None:
         f"  - via antibody-stem dictionary: {target_source_counts['antibody_stem']}",
         f"  - via trial text: {target_source_counts['trial_text']}",
         f"  - via candidate name: {target_source_counts['name']}",
+        f"  - via trial-text majority vote (lower confidence -- see attributes/target.py): "
+        f"{target_source_counts['trial_text_majority']}",
         f"- unresolved (flagged for review, not guessed): {target_source_counts['unresolved']}",
         "",
         f"Gate: {'PASS' if payload_rate >= 0.6 and target_rate >= 0.6 else 'FAIL'} (both need >= 60% "

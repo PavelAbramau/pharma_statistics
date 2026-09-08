@@ -132,6 +132,37 @@ def test_build_program_month_panel_silence_score_uses_asof_state_only(con_and_en
     assert early["silence_score_asof"] is not None
 
 
+def test_build_program_month_panel_wires_in_conviction_ratio_exact_month_only(con_and_env):
+    from pharma_stats.finance import store as fstore
+
+    con = con_and_env
+    con.execute(fstore.FINANCIAL_EVENTS_SCHEMA)
+    con.execute(
+        "INSERT INTO financial_events (event_id, subject_type, subject_id, event_date, event_type, "
+        "value, value_text, detail, source, source_url, extracted_at) VALUES "
+        "('e1', 'program', 'p1', ?, 'conviction_ratio_monthly', 1.5, NULL, '', 'test', NULL, ?)",
+        [date(2020, 3, 1), datetime(2020, 3, 1, tzinfo=timezone.utc)],
+    )
+    program = {"program_id": "p1", "proposed_name": "Trastuzumab deruxtecan", "synonyms": [],
+               "trials": [{"nct_id": "NCT001"}]}
+    rows = fp.build_program_month_panel(program, con, end=date(2020, 9, 1))
+    by_month = {r["as_of"]: r["conviction_ratio"] for r in rows}
+
+    assert by_month["2020-03-01"] == 1.5
+    # never forward-filled onto a later month, unlike estimated_cumulative_spend
+    assert by_month["2020-04-01"] is None
+    # None before any conviction event too, never guessed as 0 or 1
+    assert by_month["2020-02-01"] is None
+
+
+def test_build_program_month_panel_conviction_ratio_none_when_no_financial_events_table(con_and_env):
+    con = con_and_env
+    program = {"program_id": "p1", "proposed_name": "Trastuzumab deruxtecan", "synonyms": [],
+               "trials": [{"nct_id": "NCT001"}]}
+    rows = fp.build_program_month_panel(program, con, end=date(2020, 9, 1))
+    assert all(r["conviction_ratio"] is None for r in rows)
+
+
 def test_build_program_month_panel_empty_when_no_history(con_and_env):
     con = con_and_env
     program = {"program_id": "p2", "proposed_name": "Nothing", "synonyms": [], "trials": [{"nct_id": "NCT999"}]}

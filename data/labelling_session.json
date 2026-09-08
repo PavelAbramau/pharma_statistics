@@ -127,19 +127,8 @@
     "cand_a810c1bb08_tak-007",
     "cand_ed81a4b99b_aaa817"
   ],
-  "total_served": 1207,
-  "pending_serve": {
-    "036ac6d8-85b0-4b1f-8257-5e59237ad2ff": {
-      "program_id": "cand_ef76e483b3_other_medications:_the_doctor_",
-      "band": 0,
-      "archetype": "other",
-      "silence_score": 10,
-      "history_coverage": "full",
-      "is_repeat_probe": false,
-      "served_at": "2026-09-05T16:13:56.151863+00:00",
-      "origin_queue": "auto_review"
-    }
-  },
+  "total_served": 1453,
+  "pending_serve": {},
   "served_log": [
     {
       "program_id": "cand_1509600fd3_tlr9_agonist/stat3_sirna_conju",
@@ -10532,21 +10521,122 @@
       "served_at": "2026-09-05T16:13:56.151863+00:00",
       "origin_queue": "auto_review",
       "serve_token": "036ac6d8-85b0-4b1f-8257-5e59237ad2ff"
+    },
+    {
+      "program_id": "cand_f379d5f584_brentuximab-vedotin_associated",
+      "band": 1,
+      "archetype": "completed_no_results",
+      "silence_score": 24,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:17:08.656559+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "10519ff8-a098-4b90-9afe-57b984536822"
+    },
+    {
+      "program_id": "cand_f6eef42be1_t-dxd(trastuzmab_deruxtecan),_",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 39,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:17:08.798065+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "73eee09d-c77a-4001-acbe-b8baead7d638"
+    },
+    {
+      "program_id": "cand_f91e0fe115_chemotherapy/adc_regimen",
+      "band": 1,
+      "archetype": "other",
+      "silence_score": 26,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:17:22.078328+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "4fcb54cc-76e3-4b6b-8de9-bddbded4a13f"
+    },
+    {
+      "program_id": "cand_01cb23be3e_her2,vedolizumab",
+      "band": 1,
+      "archetype": "actively_amended",
+      "silence_score": 20,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:17:27.544427+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "ae0a357d-3b4d-40b3-8eec-8d699262febc"
+    },
+    {
+      "program_id": "cand_027d8b2300_d2:_trop2_adc_with_bp102",
+      "band": 0,
+      "archetype": "actively_amended",
+      "silence_score": 18,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:17:54.256815+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "21a6e029-5ebe-420d-80bf-ecffdb78cabe"
+    },
+    {
+      "program_id": "cand_05579ab783_adc_+_pd1_monoclonal_antibody_",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 43,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:18:17.979270+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "311c6f0d-c579-4178-bd15-0eeb856f83f7"
+    },
+    {
+      "program_id": "cand_51c9a8d7a8_trop2-adc",
+      "band": 2,
+      "archetype": "other",
+      "silence_score": 43,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:18:24.342004+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "7f15eca9-d38f-48a6-984a-dc0c20004262"
+    },
+    {
+      "program_id": "cand_5475b177e6_antibody-drug_conjugate_(adc)_",
+      "band": 0,
+      "archetype": "other",
+      "silence_score": 13,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:18:31.438765+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "255654d4-54fc-4c3d-8b0b-df7a6f11b886"
+    },
+    {
+      "program_id": "cand_e59ed272fc_adct-602_(cn);_hll2-cys-pbd_(s",
+      "band": 0,
+      "archetype": "registry_terminated_stated_reason",
+      "silence_score": 7,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:18:35.887097+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "a17ecbfc-aaee-4b2a-9c91-2d98ce496f8e"
+    },
+    {
+      "program_id": "cand_ef76e483b3_other_medications:_the_doctor_",
+      "band": 0,
+      "archetype": "other",
+      "silence_score": 10,
+      "history_coverage": "full",
+      "is_repeat_probe": false,
+      "served_at": "2026-09-07T12:18:41.796536+00:00",
+      "origin_queue": "auto_review",
+      "serve_token": "f77a1e18-f495-49a2-8708-a2ef04ebd765"
     }
   ],
   "_last_repeat_id": "cand_1b9684a03b_bnt329",
   "reopen_queue": [],
   "auto_review_order": [
-    "cand_f379d5f584_brentuximab-vedotin_associated",
-    "cand_f6eef42be1_t-dxd(trastuzmab_deruxtecan),_",
-    "cand_f91e0fe115_chemotherapy/adc_regimen",
-    "cand_01cb23be3e_her2,vedolizumab",
-    "cand_027d8b2300_d2:_trop2_adc_with_bp102",
-    "cand_05579ab783_adc_+_pd1_monoclonal_antibody_",
-    "cand_51c9a8d7a8_trop2-adc",
-    "cand_e4c4305f52_mmae-based_adc",
-    "cand_5475b177e6_antibody-drug_conjugate_(adc)_",
-    "cand_e59ed272fc_adct-602_(cn);_hll2-cys-pbd_(s"
+    "cand_e4c4305f52_mmae-based_adc"
   ],
   "active_queue": "auto_review",
   "validation_order": [],

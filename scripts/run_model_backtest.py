@@ -85,6 +85,22 @@ def main() -> None:
         model_best = bt.best_precision_point(model_curve)
         heuristic_best = bt.best_precision_point(heuristic_curve)
 
+        # Coverage cost of log_conviction_ratio as a covariate: a
+        # program-month with no usable peer group that month scores NaN
+        # (never imputed — see discrete_time_survival.py's module
+        # docstring) and is therefore never flagged at any threshold.
+        # Reported directly, not inferred from the curve's recall alone.
+        n_nan_predictions = 0
+        n_total_predictions = 0
+        if "log_conviction_ratio" in hazards["dead"].covariates:
+            predictions = bt.compute_model_predictions(panels, hazards["dead"])
+            for _dates, preds in predictions.values():
+                n_total_predictions += len(preds)
+                n_nan_predictions += sum(1 for p in preds if p != p)  # NaN != NaN
+            print(f"\nlog_conviction_ratio coverage: {n_nan_predictions}/{n_total_predictions} "
+                  f"post-cutoff program-month scores are NaN ({n_nan_predictions / n_total_predictions:.0%}) "
+                  "-- never imputed, never flagged.")
+
         # Fresh (non-cutoff, full-data) fit + flag dates at a fixed
         # threshold — this is what audit/label_sufficiency.py's cluster
         # bootstrap consumes as model_flag_date. Separate from the
@@ -110,7 +126,18 @@ def main() -> None:
               f"{len(deaths_with_rows)} have >=1 post-cutoff panel row "
               f"({len(post_cutoff_deaths) - len(deaths_with_rows)} have none — these can never be "
               "flagged at any threshold, by construction).",
-              "", "## Training event counts", ""]
+              ""]
+    if n_total_predictions:
+        pct = n_nan_predictions / n_total_predictions
+        lines += [
+            f"`log_conviction_ratio` coverage cost: {n_nan_predictions}/{n_total_predictions} "
+            f"post-cutoff program-month scores ({pct:.0%}) are NaN (no usable peer group that "
+            "month) and can never be flagged at any threshold — never imputed as 0 or 1 "
+            "(docs/decisions/0004). This is the real data cost of adding the covariate, on top of "
+            "whatever precision/recall the curve below shows.",
+            "",
+        ]
+    lines += ["## Training event counts", ""]
     for oc in dts.OUTCOME_CLASSES:
         lines.append(f"- {oc}: {int(train_df[f'event_{oc}'].sum())} events")
     def _row(p) -> str:

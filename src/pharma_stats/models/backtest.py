@@ -106,6 +106,13 @@ def compute_model_predictions(
         # breaks statsmodels' predict() with a raw TypeError rather than
         # a clean NaN — see discrete_time_survival.build_training_table.
         df["silence_score_asof"] = df["silence_score_asof"].fillna(0.0).astype(float)
+        # conviction_ratio is genuinely unknowable some months (no usable
+        # peer group) and is never imputed (docs/decisions/0004) — left
+        # as NaN, which predict() propagates to NaN for that row's score
+        # rather than raising, so that program-month is correctly never
+        # flagged at any threshold instead of being guessed at.
+        df["log_conviction_ratio"] = np.log1p(df["conviction_ratio"].astype(float)) \
+            if "conviction_ratio" in df.columns else np.nan
         preds = hazard.predict(df)
         dates_ = [date.fromisoformat(r["as_of"]) for r in panel.post_cutoff_rows]
         out[panel.program_id] = (dates_, [float(p) for p in preds])
@@ -124,8 +131,22 @@ def observed_model_thresholds(predictions: dict[str, tuple[list[date], list[floa
     model's scores live. Sweeping the observed values is the same fix
     already applied to the heuristic curve, which sweeps BAND_THRESHOLDS
     (the heuristic's own small observed domain) rather than some
-    unrelated scale."""
-    values = sorted({round(p, 6) for _, preds in predictions.values() for p in preds})
+    unrelated scale.
+
+    NaN predictions (a program-month with a covariate that isn't
+    knowable that month -- e.g. log_conviction_ratio with no usable peer
+    group; see compute_model_predictions) are excluded here, not just
+    left in: `p == p` is False only for NaN, so this drops them before
+    they ever reach `sorted()`. A NaN "threshold" is never a meaningful
+    operating point (every comparison against it is False, so it would
+    only ever contribute a useless all-zero row) -- and, worse, Python's
+    sort has no defined total order once NaN is mixed into the values
+    being compared, which silently scrambles the ordering of the REAL
+    thresholds around it too, not just the NaN entries' own position.
+    Confirmed on real data (2026-09-08): leaving NaN in produced a
+    "sorted" list that visibly wasn't (n_flagged jumping back up midway
+    through the table) -- a real, reproduced bug, not a theoretical one."""
+    values = sorted({round(p, 6) for _, preds in predictions.values() for p in preds if p == p})
     return values
 
 

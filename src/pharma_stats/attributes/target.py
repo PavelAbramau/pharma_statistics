@@ -117,11 +117,22 @@ _TARGET_ALIASES: dict[str, list[str]] = {
     "CDH6": [r"\bcdh6\b"],
     "CDH17": [r"\bcdh17\b"],
     "FOLH1": [r"\bpsma\b", r"\bfolh1\b"],
-    "CLDN18": [r"claudin[- ]?18\.2", r"\bcldn18\.2\b", r"\bcldn18\b"],
-    "EGFR": [r"\begfr\b", r"epidermal growth factor receptor"],
-    "MUC16": [r"\bmuc16\b"],
+    "CLDN18": [
+        r"claudin[- ]?18\.2", r"\bcldn18\.2\b", r"\bcldn18\b",
+        r"claudin\s*\(cldn\)\s*18(?:\.2)?",  # "Claudin (CLDN) 18.2" eligibility-criteria phrasing
+    ],
+    # EGFR's spelled-out name is a strict substring of ERBB2/HER2's own
+    # spelled-out name ("Human Epidermal Growth Factor Receptor 2") — the
+    # negative lookahead stops every HER2 mention from also false-
+    # positive-matching EGFR and manufacturing ambiguity that isn't real
+    # biology (found via TQB2102: "antibody against Human Epidermal
+    # Growth Factor Receptor 2 (HER2)" was hitting both EGFR and ERBB2).
+    "EGFR": [r"\begfr\b", r"epidermal growth factor receptor(?!s?[\s-]?2\b)"],
+    "MUC16": [r"\bmuc16\b", r"\bmucin[- ]?16\b"],  # HWK-016's own synonym spells it out: "MUCIN-16-targeted ADC"
     "MUC1": [r"\bmuc1\b"],
     "SLAMF7": [r"\bcd319\b", r"\bslamf7\b"],
+    "CD46": [r"\bcd46\b"],       # FOR46: "designed to target and bind to CD46"
+    "ADAM9": [r"\badam9\b"],     # MGC028: "antibody-drug conjugate targeted against ADAM9"
 }
 
 _COMPILED_ALIASES: dict[str, list[re.Pattern]] = {
@@ -164,12 +175,47 @@ def target_from_name(name: Optional[str], synonyms: Optional[list] = None) -> Op
     return hits.pop() if len(hits) == 1 else None
 
 
+def target_from_trial_text_majority(text_snippets: Optional[list]) -> Optional[str]:
+    """Lower-confidence fallback for exactly the case target_from_trial_text
+    (correctly) refuses: a candidate's OWN target stated repeatedly and
+    consistently, plus a single stray mention of a DIFFERENT target from
+    an unrelated clause (a combination-therapy eligibility criterion
+    naming the partner drug's own target/biomarker, e.g. RC108's own text
+    says "c-Met-targeting antibody" twice, but one combination-arm trial
+    also mentions "EGFR mutation" as an eligibility criterion for the
+    COMBINATION partner, not RC108 itself).
+
+    Resolves only on a strict majority: the top symbol's snippet-count
+    must exceed the sum of every other symbol's snippet-count. A real
+    bispecific/dual-target ADC (each target mentioned once, in the same
+    "targeting X and Y" sentence) has no such majority and correctly
+    stays unresolved — this is not a substitute for target_from_trial_text,
+    only a tie-breaker for noisy-but-lopsided evidence. Counts are per
+    SNIPPET (a symbol mentioned 3x in one verbose snippet counts once),
+    so one repetitive snippet can't manufacture a false majority."""
+    from collections import Counter
+    counts: Counter = Counter()
+    for snippet in text_snippets or []:
+        if snippet:
+            counts.update(_matches_in_text(snippet))
+    if not counts:
+        return None
+    [(top_symbol, top_count)] = counts.most_common(1)
+    rest = sum(n for sym, n in counts.items() if sym != top_symbol)
+    if top_count >= 2 and top_count > rest:
+        return top_symbol
+    return None
+
+
 def derive_target(
     name: Optional[str], synonyms: Optional[list] = None, text_snippets: Optional[list] = None,
 ) -> tuple[Optional[str], str]:
     """(hgnc_symbol_or_None, source). source is "antibody_stem",
-    "trial_text", "name", or "unresolved" — unresolved means route to a
-    review queue, never guess."""
+    "trial_text", "name", "trial_text_majority", or "unresolved" —
+    unresolved means route to a review queue, never guess.
+    trial_text_majority is the lowest-confidence resolved tier — see its
+    docstring — kept last and clearly labelled so callers that want only
+    the high-confidence tiers can filter on source."""
     t = target_from_antibody_stem(name, synonyms)
     if t:
         return t, "antibody_stem"
@@ -179,4 +225,7 @@ def derive_target(
     t = target_from_name(name, synonyms)
     if t:
         return t, "name"
+    t = target_from_trial_text_majority(text_snippets)
+    if t:
+        return t, "trial_text_majority"
     return None, "unresolved"
